@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>情绪头像 · mock harness</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: #181a1f; color: #ddd; font-family: system-ui, "Microsoft YaHei", sans-serif; display: flex; }
+  /* 左：假聊天区（模拟酒馆楼层结构） */
+  #chat-wrap { flex: 1; padding: 16px; overflow-y: auto; height: 100vh; box-sizing: border-box; }
+  .mes { background: #22252c; border-radius: 8px; margin: 10px 0; padding: 10px 14px; }
+  .mes .mes_block { display: block; }
+  .mes .mes_text { line-height: 1.7; font-size: 16px; white-space: pre-wrap; }
+  .mes.is_user .mes_text { color: #9fd0ff; }
+  .mes .mes_text p { margin: .4em 0; }
+  .mes .mes_text strong { color: #fff; }
+  /* 右：控制台 */
+  #panel { width: 380px; background: #14161a; border-left: 1px solid #333; padding: 12px; height: 100vh; overflow-y: auto; box-sizing: border-box; font-size: 13px; flex-shrink: 0; }
+  #panel h3 { margin: 4px 0 8px; font-size: 15px; }
+  #panel h4 { margin: 12px 0 4px; font-size: 13px; color: #8ab; border-bottom: 1px solid #2a2e36; padding-bottom: 2px; }
+  #panel button { background: #2d5f8a; color: #fff; border: 0; border-radius: 4px; padding: 4px 10px; margin: 2px; cursor: pointer; font-size: 12px; }
+  #panel button:hover { background: #3a78ab; }
+  #panel button.warn { background: #8a4a2d; }
+  .case { padding: 4px 6px; border-radius: 4px; margin: 2px 0; }
+  .case.pass { background: rgba(60,160,80,.25); }
+  .case.fail { background: rgba(200,60,60,.35); }
+  .case .name { font-weight: 600; }
+  .case .detail { color: #bbb; font-size: 11px; white-space: pre-wrap; font-family: Consolas, monospace; }
+  #stub-info, #status { font-size: 12px; color: #9a9; font-family: Consolas, monospace; white-space: pre-wrap; }
+  #log { font-size: 11px; color: #888; max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: Consolas, monospace; border: 1px solid #2a2e36; padding: 4px; }
+</style>
+</head>
+<body>
+<div id="chat-wrap"><div id="chat"></div></div>
+<div id="panel">
+  <h3>情绪头像 mock harness</h3>
+  <div id="status">脚本状态：未加载</div>
+  <h4>环境 stub</h4>
+  <div id="stub-info"></div>
+  <h4>操作</h4>
+  <div id="actions"></div>
+  <h4>测试用例</h4>
+  <button id="run-tests">▶ 运行全部断言</button>
+  <div id="cases"></div>
+  <h4>日志</h4>
+  <div id="log"></div>
+</div>
+
+<script>
+/* ============================================================
+ * 酒馆环境 stub（必须在 emotion-avatar.js 之前定义）
+ * ============================================================ */
+window.tavern_events = {
+  APP_READY: 'app_ready',
+  CHAT_CHANGED: 'chat_changed',
+  CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
+  USER_MESSAGE_RENDERED: 'user_message_rendered',
+  MESSAGE_EDITED: 'message_edited',
+  MESSAGE_SWIPED: 'message_swiped',
+  MESSAGE_RECEIVED: 'message_received',
+  MORE_MESSAGES_LOADED: 'more_messages_loaded',
+  GENERATION_AFTER_COMMANDS: 'generation_after_commands',
+};
+const __listeners = {};
+window.eventOn = function (ev, fn) { (__listeners[ev] = __listeners[ev] || []).push(fn); };
+window.__trigger = function (ev, arg) { (__listeners[ev] || []).forEach(function (f) { try { f(arg); } catch (e) { console.error('[stub listener]', ev, e); } }); };
+
+window.__injectCalls = [];
+window.injectPrompts = function (prompts, options) {
+  window.__injectCalls.push({ prompts: prompts, options: options, t: Date.now() });
+  return { uninject: function () { window.__injectCalls.push({ uninjectAll: true, t: Date.now() }); } };
+};
+window.uninjectPrompts = function (ids) { window.__injectCalls.push({ uninjectIds: ids, t: Date.now() }); };
+
+/* 假聊天数据（模拟 chat[i].mes 原文，用于断言"原文未被写"） */
+window.__chat = [];
+/* 收集页面错误，供用例断言加载零报错 */
+window.__errors = [];
+window.addEventListener('error', function (e) { window.__errors.push(e.message); });
+
+function __log(msg) {
+  var el = document.getElementById('log');
+  var time = new Date().toTimeString().slice(0, 8);
+  el.textContent = '[' + time + '] ' + msg + '\n' + el.textContent;
+}
+
+/* 生成纯色小图 dataURL（种子头像用） */
+function __makeImg(hue, label) {
+  var c = document.createElement('canvas'); c.width = 96; c.height = 96;
+  var ctx = c.getContext('2d');
+  ctx.fillStyle = 'hsl(' + hue + ',55%,45%)';
+  ctx.fillRect(0, 0, 96, 96);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, 48, 48, 88);
+  return c.toDataURL('image/png');
+}
+
+/* 添加一个假楼层（is_user 区分用户/AI 楼层） */
+function __addFloor(text, isUser) {
+  var chat = document.getElementById('chat');
+  var mes = document.createElement('div');
+  mes.className = 'mes' + (isUser ? ' is_user' : '');
+  var block = document.createElement('div'); block.className = 'mes_block';
+  var mesText = document.createElement('div'); mesText.className = 'mes_text';
+  mesText.innerHTML = text;
+  block.appendChild(mesText); mes.appendChild(block); chat.appendChild(mes);
+  window.__chat.push({ mes: text, is_user: !!isUser });
+  __log((isUser ? '[用户] ' : '[AI] ') + '添加楼层 #' + (window.__chat.length - 1));
+  return mes;
+}
+
+/* 面板按钮注册 */
+function __btn(label, fn, warn) {
+  var b = document.createElement('button');
+  b.textContent = label; b.onclick = fn;
+  if (warn) b.className = 'warn';
+  document.getElementById('actions').appendChild(b);
+  return b;
+}
+</script>
+
+<script src="../emotion-avatar.js"></script>
+
+<script>
+/* ============================================================
+ * harness 控制逻辑与测试用例
+ * ============================================================ */
+var TESTS = [];
+function test(name, fn) { TESTS.push({ name: name, run: fn }); }
+function assert(cond, detail) { if (!cond) throw new Error(detail || '断言失败'); }
+
+/* ---------- M0 用例：加载与基建 ---------- */
+test('M0-1 脚本已加载且暴露版本', function () {
+  assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
+  assert(window.EmoAvatar.version === '0.1.0', '版本不符：' + window.EmoAvatar.version);
+});
+test('M0-2 样式已注入且尺寸变量生效', function () {
+  assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
+  assert(document.getElementById('eca-size-style'), '缺少 #eca-size-style');
+  var v = getComputedStyle(document.documentElement).getPropertyValue('--eca-size').trim();
+  assert(v === '2.5em', '--eca-size = ' + v);
+});
+test('M0-3 加载过程零报错', function () {
+  assert(window.__errors.length === 0, '错误：' + window.__errors.join(' | '));
+});
+
+/* ---------- 操作按钮 ---------- */
+__btn('添加AI楼层(含标签)', function () {
+  __addFloor('{弗兰克(大笑)}“看不见的敌人？”弗兰克咧嘴一笑，那笑容里带着一股嗜血的狠劲。', false);
+});
+__btn('添加AI楼层(纯文本)', function () {
+  __addFloor('夜色渐深，码头上的雾气越来越浓。', false);
+});
+__btn('添加用户楼层', function () {
+  __addFloor('我握紧了手里的枪。', true);
+});
+__btn('模拟流式输出', function () {
+  var chat = document.getElementById('chat');
+  var last = chat.lastElementChild;
+  if (!last) { __log('没有楼层，先添加一个'); return; }
+  var target = last.querySelector('.mes_text');
+  var full = '{罗兰(思考)}“等等……这个脚印不对。”罗兰蹲下身，眉头紧锁。';
+  var i = 0;
+  var timer = setInterval(function () {
+    i += 3;
+    target.textContent = full.slice(0, i);
+    if (i >= full.length) { clearInterval(timer); __log('流式模拟完成'); }
+  }, 60);
+});
+__btn('模拟重渲染(innerHTML重写)', function () {
+  var chat = document.getElementById('chat');
+  var last = chat.lastElementChild;
+  if (!last) { __log('没有楼层'); return; }
+  var target = last.querySelector('.mes_text');
+  var raw = window.__chat[window.__chat.length - 1];
+  target.innerHTML = raw;
+  __log('已重写最后一楼 innerHTML');
+});
+__btn('触发 CHARACTER_MESSAGE_RENDERED', function () { window.__trigger('character_message_rendered', 0); __log('事件已触发'); });
+__btn('触发 CHAT_CHANGED', function () { window.__trigger('chat_changed', 'test-chat'); __log('事件已触发'); });
+__btn('清空聊天与注入记录', function () {
+  document.getElementById('chat').innerHTML = '';
+  window.__chat = []; window.__injectCalls = [];
+  __log('已清空');
+}, true);
+
+/* ---------- 用例运行器 ---------- */
+document.getElementById('run-tests').onclick = function () {
+  var box = document.getElementById('cases');
+  box.innerHTML = '';
+  var pass = 0, fail = 0;
+  TESTS.forEach(function (t) {
+    var div = document.createElement('div');
+    div.className = 'case';
+    try {
+      var detail = t.run();
+      div.classList.add('pass');
+      div.innerHTML = '<span class="name">✔ ' + t.name + '</span>' + (detail ? '<div class="detail">' + detail + '</div>' : '');
+      pass++;
+    } catch (e) {
+      div.classList.add('fail');
+      div.innerHTML = '<span class="name">✘ ' + t.name + '</span><div class="detail">' + (e.message || e) + '</div>';
+      fail++;
+    }
+    box.appendChild(div);
+  });
+  __log('断言运行：' + pass + ' 通过 / ' + fail + ' 失败');
+};
+
+/* ---------- 状态面板 ---------- */
+function refreshPanel() {
+  var s = '脚本状态：';
+  s += window.EmoAvatar ? ('已加载 v' + window.EmoAvatar.version) : '未加载';
+  document.getElementById('status').textContent = s;
+  var evCount = Object.keys(__listeners).reduce(function (a, k) { return a + __listeners[k].length; }, 0);
+  document.getElementById('stub-info').textContent =
+    '已注册事件监听：' + evCount + ' 个\n' +
+    '监听的事件：' + Object.keys(__listeners).join(', ') + '\n' +
+    '注入调用：' + window.__injectCalls.length + ' 次';
+}
+refreshPanel();
+__log('harness 就绪');
+</script>
+</body>
+</html>
