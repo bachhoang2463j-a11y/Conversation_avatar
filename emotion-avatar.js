@@ -40,6 +40,13 @@
             if (typeof eventOn === 'function') { eventOn(event, fn); return; }
             if (topWindow.eventOn) topWindow.eventOn(event, fn);
         },
+        inject(prompts) {
+            if (typeof injectPrompts === 'function') return injectPrompts(prompts);
+            if (topWindow.TavernHelper && typeof topWindow.TavernHelper.injectPrompts === 'function') {
+                return topWindow.TavernHelper.injectPrompts(prompts);
+            }
+            return null;
+        },
     };
 
     // ============================================
@@ -217,17 +224,81 @@
             'MESSAGE_SWIPED',
             'MESSAGE_RECEIVED',
             'MORE_MESSAGES_LOADED',
-            'CHAT_CHANGED',
         ].forEach(function (key) {
             const ev = Env.events[key];
             if (ev) Env.on(ev, scheduleScan);
         });
+        // CHAT_CHANGED：注入只对当前聊天有效，切聊天必须重注；同时全扫恢复渲染
+        const chatChanged = Env.events.CHAT_CHANGED;
+        if (chatChanged) {
+            Env.on(chatChanged, function () {
+                applyInjection();
+                scheduleScan();
+            });
+        }
         hookStreamObserver();
     }
 
     // ============================================
-    // 提示词注入（M2）
+    // 提示词注入（M2）：MiniMapStatus 早期同款通道
+    // system / in_chat / depth 0（上下文最末尾，紧贴最新消息）
     // ============================================
+    let uninjectHandle = null;
+
+    function buildPrompt() {
+        if (!characters.length) return null;
+        const list = characters.join('、');
+        // 示例取第一个登记角色，与其同名的对话片段对齐
+        const hero = characters[0];
+        const example = '{' + hero + '(大笑)}“看不见的敌人？”' + hero
+            + '咧嘴一笑，那笑容里带着一股嗜血的狠劲，“那最好不过了。看不见的东西，通常也躲不开这种口径的子弹。”';
+        return '<头像标记>\n'
+            + '若' + list + '说话，请在对应自然段前加入标记`{名称(情绪)}`。\n'
+            + '情绪词限定十个：' + EMOTIONS.join('、') + '\n'
+            + '无法确定时，优先使用默认。\n'
+            + '例：\n'
+            + example + '\n'
+            + '</头像标记>';
+    }
+
+    /** 注入只对当前聊天有效：切聊天（CHAT_CHANGED）与登记变更时都必须重注 */
+    function applyInjection() {
+        if (uninjectHandle) {
+            try { uninjectHandle.uninject(); } catch (e) { /* 句柄可能已随脚本卸载失效 */ }
+            uninjectHandle = null;
+        }
+        if (!settings.enabled || !characters.length) return;
+        const content = buildPrompt();
+        if (!content) return;
+        try {
+            uninjectHandle = Env.inject([{
+                id: INJECT_ID,
+                position: 'in_chat',
+                depth: 0,
+                role: 'system',
+                content: content,
+            }]);
+        } catch (e) {
+            console.warn('[' + SCRIPT_NAME + '] 提示词注入失败:', e);
+        }
+    }
+
+    /** 总开关：关闭即撤销注入 */
+    function setEnabled(enabled) {
+        settings.enabled = !!enabled;
+        persistSettings();
+        applyInjection();
+    }
+
+    /** 头像显示大小（em），1.5–5，即时生效（只改 CSS 变量） */
+    function setSize(size) {
+        const n = Number(size);
+        if (Number.isFinite(n) && n >= 1.5 && n <= 5) {
+            settings.size = n;
+            persistSettings();
+            applySizeVar();
+        }
+    }
 
     // ============================================
     // IndexedDB 存储层（M3）
@@ -249,10 +320,13 @@
         emotions: EMOTIONS.slice(),
         /** 调试/harness 桥：直接向内存缓存塞头像（不落库） */
         seedAvatar(name, emotion, src) { avatarCache.set(name + '_' + emotion, src); },
-        /** 调试/harness 桥：整体替换登记名单（不落 localStorage） */
-        setCharacters(list) { characters = list.slice(); },
+        /** 调试/harness 桥：整体替换登记名单（不落 localStorage，但会同步重注提示词） */
+        setCharacters(list) { characters = list.slice(); applyInjection(); },
         getCharacters() { return characters.slice(); },
+        setEnabled: setEnabled,
+        setSize: setSize,
         scanAll: scanAll,
+        applyInjection: applyInjection,
     };
 
     // ============================================
@@ -263,6 +337,7 @@
         injectStyles();
         applySizeVar();
         hookEvents();
+        applyInjection();
         scanAll();
     }
     if (doc.readyState === 'loading') {

@@ -262,6 +262,57 @@ test('M1-10 重扫幂等', function () {
   assert(n2 === 2, '重扫产生重复：' + n2);
 });
 
+/* ---------- M2 用例：提示词注入 ---------- */
+function __lastInject() {
+  for (var i = window.__injectCalls.length - 1; i >= 0; i--) {
+    if (window.__injectCalls[i].prompts) return window.__injectCalls[i];
+  }
+  return null;
+}
+test('M2-1 注入内容正确（XML包裹/名单插值/参数）', function () {
+  __resetChat(); window.__injectCalls = [];
+  window.EmoAvatar.setCharacters(['弗兰克', '罗兰']);
+  var call = __lastInject();
+  assert(call, '没有注入调用');
+  var p = call.prompts[0];
+  assert(p.id === 'emoavatar-prompt', '注入 id 错误');
+  assert(p.position === 'in_chat' && p.depth === 0 && p.role === 'system', '注入参数错误');
+  assert(p.content.indexOf('<头像标记>') === 0, '缺少 XML 包裹');
+  assert(p.content.indexOf('</头像标记>') !== -1, '缺少 XML 闭合');
+  assert(p.content.indexOf('若弗兰克、罗兰说话') !== -1, '名单插值错误');
+  assert(p.content.indexOf('{弗兰克(大笑)}') !== -1, '示例应取首个登记角色');
+  assert(p.content.indexOf('杀意') !== -1, '情绪词表不完整');
+});
+test('M2-2 无登记角色不注入', function () {
+  __resetChat(); window.__injectCalls = [];
+  window.EmoAvatar.setCharacters([]);
+  assert(__lastInject() === null, '空名单不应注入');
+});
+test('M2-3 CHAT_CHANGED 触发重注', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['弗兰克']);
+  window.__injectCalls = [];
+  window.__trigger('chat_changed', 'test-chat');
+  var call = __lastInject();
+  assert(call, 'CHAT_CHANGED 后应有注入调用');
+  assert(call.prompts[0].id === 'emoavatar-prompt', '重注 id 错误');
+});
+test('M2-4 总开关关闭撤销、开启恢复', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['弗兰克']);
+  window.EmoAvatar.setEnabled(true);
+  window.__injectCalls = [];
+  window.EmoAvatar.setEnabled(false);
+  assert(__lastInject() === null, '关闭后不应有新注入');
+  var last = window.__injectCalls[window.__injectCalls.length - 1];
+  assert(last && last.uninjectAll === true, '关闭时应撤销旧注入');
+  window.__injectCalls = [];
+  window.__trigger('chat_changed', 'x');
+  assert(__lastInject() === null, '关闭状态下切聊天不应注入');
+  window.EmoAvatar.setEnabled(true);
+  assert(__lastInject() && __lastInject().prompts, '开启后应恢复注入');
+});
+
 /* ---------- 操作按钮 ---------- */
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
