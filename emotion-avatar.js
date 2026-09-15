@@ -217,7 +217,6 @@
 
     function hookEvents() {
         [
-            'APP_READY',
             'CHARACTER_MESSAGE_RENDERED',
             'USER_MESSAGE_RENDERED',
             'MESSAGE_EDITED',
@@ -228,11 +227,14 @@
             const ev = Env.events[key];
             if (ev) Env.on(ev, scheduleScan);
         });
+        const appReady = Env.events.APP_READY;
+        if (appReady) Env.on(appReady, function () { addMenuButton(); scheduleScan(); });
         // CHAT_CHANGED：注入只对当前聊天有效，切聊天必须重注；同时全扫恢复渲染
         const chatChanged = Env.events.CHAT_CHANGED;
         if (chatChanged) {
             Env.on(chatChanged, function () {
                 applyInjection();
+                addMenuButton();
                 scheduleScan();
             });
         }
@@ -288,6 +290,7 @@
         settings.enabled = !!enabled;
         persistSettings();
         applyInjection();
+        syncPanelControls();
     }
 
     /** 头像显示大小（em），1.5–5，即时生效（只改 CSS 变量） */
@@ -297,6 +300,8 @@
             settings.size = n;
             persistSettings();
             applySizeVar();
+            syncPanelControls();
+            updateSizePreview();
         }
     }
 
@@ -428,8 +433,366 @@
     }
 
     // ============================================
-    // 管理面板（M4）
+    // 管理面板（M4）：魔法棒菜单入口 + 单弹窗
     // ============================================
+    const PANEL_CSS = ''
+        + '#eca-panel{display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.45);align-items:center;justify-content:center;font-size:14px;font-family:system-ui,"Microsoft YaHei",sans-serif;}'
+        + '#eca-panel .eca-modal{width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;background:#23262e;color:#e6e6e6;border:1px solid #3a3f4b;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);}'
+        + '#eca-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #3a3f4b;font-weight:600;}'
+        + '#eca-panel .eca-close{background:none;border:0;color:#999;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;}'
+        + '#eca-panel .eca-close:hover{color:#fff;}'
+        + '#eca-panel .eca-body{display:flex;min-height:320px;overflow:hidden;}'
+        + '#eca-panel .eca-side{width:170px;border-right:1px solid #3a3f4b;padding:10px;display:flex;flex-direction:column;gap:6px;overflow-y:auto;}'
+        + '#eca-panel .eca-side-title{color:#8ab;font-size:12px;}'
+        + '#eca-panel .eca-char-item{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;cursor:pointer;background:#2a2e37;}'
+        + '#eca-panel .eca-char-item:hover{background:#323744;}'
+        + '#eca-panel .eca-char-item.active{background:#2d5f8a;}'
+        + '#eca-panel .eca-char-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+        + '#eca-panel .eca-char-del{background:none;border:0;color:#c66;cursor:pointer;font-size:12px;padding:0 2px;}'
+        + '#eca-panel .eca-add{margin-top:auto;padding:6px;border-radius:6px;border:1px dashed #555;background:none;color:#9bd;cursor:pointer;}'
+        + '#eca-panel .eca-detail{flex:1;padding:12px 16px;overflow-y:auto;}'
+        + '#eca-panel .eca-detail-empty{color:#777;padding:40px 0;text-align:center;}'
+        + '#eca-panel .eca-detail-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}'
+        + '#eca-panel .eca-detail-head b{font-size:15px;}'
+        + '#eca-panel .eca-detail-tip{color:#778;font-size:12px;margin-bottom:8px;}'
+        + '#eca-panel .eca-mini-btn{padding:3px 10px;border-radius:5px;border:1px solid #4a5160;background:#2a2e37;color:#cde;cursor:pointer;font-size:12px;}'
+        + '#eca-panel .eca-mini-btn:hover{background:#323744;}'
+        + '#eca-panel .eca-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;}'
+        + '#eca-panel .eca-cell{border:1px solid #3a3f4b;border-radius:8px;padding:6px;text-align:center;cursor:pointer;background:#282c35;}'
+        + '#eca-panel .eca-cell:hover{border-color:#4a90c4;}'
+        + '#eca-panel .eca-cell-img{height:72px;display:flex;align-items:center;justify-content:center;margin-bottom:4px;}'
+        + '#eca-panel .eca-cell-img img{max-height:72px;max-width:100%;border-radius:6px;}'
+        + '#eca-panel .eca-cell-empty{width:56px;height:56px;border:1px dashed #555;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#666;font-size:11px;}'
+        + '#eca-panel .eca-cell-name{font-size:12px;color:#aab;}'
+        + '#eca-panel .eca-footer{display:flex;align-items:center;gap:18px;padding:10px 16px;border-top:1px solid #3a3f4b;flex-wrap:wrap;}'
+        + '#eca-panel .eca-switch{display:flex;align-items:center;gap:6px;cursor:pointer;}'
+        + '#eca-panel .eca-size{display:flex;align-items:center;gap:8px;}'
+        + '#eca-panel .eca-size input[type=range]{width:140px;}'
+        + '#eca-panel .eca-size-val{min-width:3.5em;color:#9bd;}'
+        + '#eca-panel .eca-size-preview{margin-left:auto;display:flex;align-items:center;gap:8px;color:#889;}'
+        + '.eca-toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:#2d5f8a;color:#fff;padding:8px 18px;border-radius:6px;z-index:100000;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .4s;}'
+        + '.eca-toast.eca-toast-warn{background:#8a4a2d;}'
+        + '.eca-toast.eca-toast-out{opacity:0;}';
+
+    function ensurePanelStyles() {
+        if (doc.getElementById('eca-panel-styles')) return;
+        const style = doc.createElement('style');
+        style.id = 'eca-panel-styles';
+        style.textContent = PANEL_CSS;
+        doc.head.appendChild(style);
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function toast(msg, isWarn) {
+        const el = doc.createElement('div');
+        el.className = 'eca-toast' + (isWarn ? ' eca-toast-warn' : '');
+        el.textContent = msg;
+        doc.body.appendChild(el);
+        setTimeout(function () { el.classList.add('eca-toast-out'); }, 1800);
+        setTimeout(function () { el.remove(); }, 2300);
+    }
+
+    /** 图片降采样：长边 ≤ maxEdge，输出 PNG Blob（单格上传与批量切图共用） */
+    function downscaleBlob(blob, maxEdge) {
+        return new Promise(function (resolve, reject) {
+            const url = createBlobUrl(blob);
+            const img = new topWindow.Image();
+            img.onload = function () {
+                try {
+                    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+                    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                    const canvas = doc.createElement('canvas');
+                    canvas.width = w; canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    canvas.toBlob(function (out) {
+                        revokeCacheUrl(url);
+                        if (out) resolve(out); else reject(new Error('图片编码失败'));
+                    }, 'image/png');
+                } catch (e) { revokeCacheUrl(url); reject(e); }
+            };
+            img.onerror = function () { revokeCacheUrl(url); reject(new Error('图片加载失败')); };
+            img.src = url;
+        });
+    }
+
+    // ---------- 角色登记操作（面板与调试桥共用，全部持久化） ----------
+    function addCharacter(name) {
+        name = String(name || '').trim();
+        if (!name || name.length > 30 || /[{}()]/.test(name)) return false;
+        if (characters.indexOf(name) !== -1) return false;
+        characters.push(name);
+        persistCharacters();
+        applyInjection();
+        return true;
+    }
+
+    function removeCharacter(name) {
+        const i = characters.indexOf(name);
+        if (i === -1) return Promise.resolve(false);
+        characters.splice(i, 1);
+        persistCharacters();
+        if (selectedCharacter === name) selectedCharacter = characters[0] || null;
+        applyInjection();
+        return deleteCharacterAvatars(name).then(function () { return true; });
+    }
+
+    function renameCharacter(oldName, newName) {
+        newName = String(newName || '').trim();
+        if (!newName || newName.length > 30 || /[{}()]/.test(newName)) return Promise.resolve(false);
+        if (characters.indexOf(newName) !== -1) return Promise.resolve(false);
+        const i = characters.indexOf(oldName);
+        if (i === -1) return Promise.resolve(false);
+        characters[i] = newName;
+        persistCharacters();
+        if (selectedCharacter === oldName) selectedCharacter = newName;
+        applyInjection();
+        return renameCharacterAvatars(oldName, newName).then(function () { return true; });
+    }
+
+    /** 单格上传入口：降采样（长边 256）后入库 */
+    function uploadAvatarFile(character, emotion, file) {
+        if (!EMOTION_SET.has(emotion)) return Promise.reject(new Error('非法情绪词：' + emotion));
+        return downscaleBlob(file, 256).then(function (blob) {
+            return saveAvatar(character, emotion, blob);
+        });
+    }
+
+    // ---------- 面板 DOM ----------
+    let panelEl = null;
+    let selectedCharacter = null;
+    let fileInputEl = null;
+
+    function addMenuButton() {
+        if (doc.getElementById('eca-menu-btn')) return;
+        const mount = doc.getElementById('extensionsMenu') || doc.getElementById('top-bar');
+        if (!mount) return;
+        const btn = doc.createElement('div');
+        btn.id = 'eca-menu-btn';
+        btn.className = 'menu_button';
+        btn.title = '情绪头像管理';
+        const icon = doc.createElement('i');
+        icon.className = 'fa-solid fa-face-smile';
+        icon.setAttribute('aria-hidden', 'true');
+        btn.appendChild(icon);
+        btn.appendChild(doc.createTextNode(' 情绪头像'));
+        btn.addEventListener('click', openPanel);
+        mount.appendChild(btn);
+    }
+
+    function buildPanelSkeleton() {
+        const root = doc.createElement('div');
+        root.id = 'eca-panel';
+        root.innerHTML = ''
+            + '<div class="eca-modal">'
+            + '  <div class="eca-header"><span>情绪头像管理</span><button class="eca-close" title="关闭">×</button></div>'
+            + '  <div class="eca-body">'
+            + '    <div class="eca-side">'
+            + '      <div class="eca-side-title">已登记角色</div>'
+            + '      <div id="eca-char-list"></div>'
+            + '      <button class="eca-add" id="eca-add-char">＋ 新增角色</button>'
+            + '    </div>'
+            + '    <div class="eca-detail" id="eca-detail"></div>'
+            + '  </div>'
+            + '  <div class="eca-footer">'
+            + '    <label class="eca-switch"><input type="checkbox" id="eca-enabled"> 启用提示词注入</label>'
+            + '    <div class="eca-size"><span>头像大小</span>'
+            + '      <input type="range" id="eca-size-range" min="1.5" max="5" step="0.1">'
+            + '      <span class="eca-size-val" id="eca-size-val"></span></div>'
+            + '    <div class="eca-size-preview" id="eca-size-preview"></div>'
+            + '  </div>'
+            + '</div>';
+        fileInputEl = doc.createElement('input');
+        fileInputEl.type = 'file';
+        fileInputEl.accept = 'image/*';
+        fileInputEl.style.display = 'none';
+        root.appendChild(fileInputEl);
+        bindPanelEvents(root);
+        return root;
+    }
+
+    function bindPanelEvents(root) {
+        root.querySelector('.eca-close').addEventListener('click', closePanel);
+        root.addEventListener('click', function (ev) {
+            const target = ev.target;
+            if (target.id === 'eca-add-char') { addCharacterFlow(); return; }
+            const del = target.closest ? target.closest('.eca-char-del') : null;
+            if (del) { removeCharacterFlow(del.dataset.name); return; }
+            const rename = target.closest ? target.closest('#eca-rename-btn') : null;
+            if (rename) { renameCharacterFlow(selectedCharacter); return; }
+            const item = target.closest ? target.closest('.eca-char-item') : null;
+            if (item && item.dataset.name) {
+                selectedCharacter = item.dataset.name;
+                renderPanel();
+                return;
+            }
+            const cell = target.closest ? target.closest('.eca-cell') : null;
+            if (cell && cell.dataset.emotion && selectedCharacter) {
+                fileInputEl.dataset.emotion = cell.dataset.emotion;
+                fileInputEl.click();
+            }
+        });
+        fileInputEl.addEventListener('change', function () {
+            const file = fileInputEl.files && fileInputEl.files[0];
+            const emotion = fileInputEl.dataset.emotion;
+            fileInputEl.value = '';
+            if (!file || !emotion || !selectedCharacter) return;
+            uploadAvatarFile(selectedCharacter, emotion, file)
+                .then(function () {
+                    renderPanel();
+                    toast('已更新「' + selectedCharacter + '·' + emotion + '」');
+                })
+                .catch(function (e) { toast('上传失败：' + (e && e.message || e), true); });
+        });
+        const enabledCb = root.querySelector('#eca-enabled');
+        enabledCb.addEventListener('change', function () {
+            setEnabled(enabledCb.checked);
+            toast(enabledCb.checked ? '提示词注入已开启' : '提示词注入已关闭');
+        });
+        const range = root.querySelector('#eca-size-range');
+        range.addEventListener('input', function () {
+            setSize(parseFloat(range.value));
+            syncPanelControls();
+            updateSizePreview();
+        });
+    }
+
+    function buildSizePreviewEl() {
+        let sample = null;
+        if (selectedCharacter) {
+            for (let i = 0; i < EMOTIONS.length; i++) {
+                const src = avatarCache.get(selectedCharacter + '_' + EMOTIONS[i]);
+                if (src) { sample = src; break; }
+            }
+        }
+        if (sample) {
+            const img = doc.createElement('img');
+            img.className = 'eca-avatar';
+            img.src = sample;
+            img.alt = '预览';
+            return img;
+        }
+        const span = doc.createElement('span');
+        span.className = 'eca-avatar eca-placeholder';
+        return span;
+    }
+
+    function updateSizePreview() {
+        if (!panelEl) return;
+        const box = panelEl.querySelector('#eca-size-preview');
+        if (!box) return;
+        box.textContent = '预览 ';
+        box.appendChild(buildSizePreviewEl());
+    }
+
+    function syncPanelControls() {
+        if (!panelEl) return;
+        const cb = panelEl.querySelector('#eca-enabled');
+        if (cb) cb.checked = settings.enabled;
+        const range = panelEl.querySelector('#eca-size-range');
+        if (range) range.value = String(settings.size);
+        const val = panelEl.querySelector('#eca-size-val');
+        if (val) val.textContent = Number(settings.size).toFixed(1) + 'em';
+    }
+
+    function renderPanel() {
+        if (!panelEl) return;
+        if (selectedCharacter && characters.indexOf(selectedCharacter) === -1) {
+            selectedCharacter = characters[0] || null;
+        }
+        if (!selectedCharacter && characters.length) selectedCharacter = characters[0];
+        // 角色列表
+        const listBox = panelEl.querySelector('#eca-char-list');
+        listBox.innerHTML = characters.length
+            ? characters.map(function (name) {
+                return '<div class="eca-char-item' + (name === selectedCharacter ? ' active' : '') + '" data-name="' + escapeHtml(name) + '">'
+                    + '<span class="eca-char-name">' + escapeHtml(name) + '</span>'
+                    + '<button class="eca-char-del" data-name="' + escapeHtml(name) + '" title="删除角色及头像">✕</button>'
+                    + '</div>';
+            }).join('')
+            : '<div class="eca-detail-empty" style="padding:12px 0;">暂无角色</div>';
+        // 角色详情
+        const detail = panelEl.querySelector('#eca-detail');
+        if (!selectedCharacter) {
+            detail.innerHTML = '<div class="eca-detail-empty">左侧新增一个角色后，在这里为十种情绪配置头像</div>';
+        } else {
+            const cells = EMOTIONS.map(function (emotion) {
+                const src = avatarCache.get(selectedCharacter + '_' + emotion);
+                const imgHtml = src
+                    ? '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(emotion) + '">'
+                    : '<div class="eca-cell-empty">' + escapeHtml(emotion) + '</div>';
+                return '<div class="eca-cell" data-emotion="' + escapeHtml(emotion) + '" title="点击上传/更换「' + escapeHtml(emotion) + '」头像">'
+                    + '<div class="eca-cell-img">' + imgHtml + '</div>'
+                    + '<div class="eca-cell-name">' + escapeHtml(emotion) + '</div>'
+                    + '</div>';
+            }).join('');
+            detail.innerHTML = ''
+                + '<div class="eca-detail-head"><b>' + escapeHtml(selectedCharacter) + '</b>'
+                + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button></div>'
+                + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；十种情绪缺图时自动回落「默认」</div>'
+                + '<div class="eca-grid">' + cells + '</div>';
+        }
+        syncPanelControls();
+        updateSizePreview();
+    }
+
+    function openPanel() {
+        ensurePanelStyles();
+        if (!panelEl) {
+            panelEl = buildPanelSkeleton();
+            doc.body.appendChild(panelEl);
+        }
+        renderPanel();
+        panelEl.style.display = 'flex';
+    }
+
+    function closePanel() {
+        if (panelEl) panelEl.style.display = 'none';
+    }
+
+    // ---------- 面板交互流程（prompt/confirm 走顶层窗口） ----------
+    function uiPrompt(message, defaultValue) {
+        if (typeof topWindow.prompt !== 'function') { toast('当前环境不支持输入框', true); return null; }
+        return topWindow.prompt(message, defaultValue);
+    }
+    function uiConfirm(message) {
+        if (typeof topWindow.confirm !== 'function') return true;
+        return topWindow.confirm(message);
+    }
+
+    function addCharacterFlow() {
+        const name = uiPrompt('新增角色名（须与 AI 输出的角色名逐字一致）：', '');
+        if (name === null) return;
+        if (addCharacter(name)) {
+            selectedCharacter = characters[characters.length - 1];
+            renderPanel();
+            toast('已登记角色「' + selectedCharacter + '」');
+        } else {
+            toast('角色名无效（1-30 字，不含花括号/圆括号）或已存在', true);
+        }
+    }
+
+    function removeCharacterFlow(name) {
+        if (!name) return;
+        if (!uiConfirm('删除角色「' + name + '」及其全部头像？')) return;
+        removeCharacter(name).then(function (ok) {
+            if (ok) { renderPanel(); toast('已删除「' + name + '」'); }
+        });
+    }
+
+    function renameCharacterFlow(name) {
+        if (!name) return;
+        const newName = uiPrompt('修改角色名（头像会一并迁移）：', name);
+        if (newName === null || newName === name) return;
+        renameCharacter(name, newName).then(function (ok) {
+            if (ok) { renderPanel(); toast('已改名「' + newName + '」'); }
+            else toast('新名字无效或已存在', true);
+        });
+    }
 
     // ============================================
     // 单图批量网格导入（M5）
@@ -461,6 +824,15 @@
             avatarCache.forEach(function (url) { revokeCacheUrl(url); });
             avatarCache.clear();
         },
+        /* 登记操作桥（持久化） */
+        setCharactersPersist(list) { characters = list.slice(); persistCharacters(); applyInjection(); },
+        addCharacter: addCharacter,
+        removeCharacter: removeCharacter,
+        renameCharacter: renameCharacter,
+        uploadAvatarFile: uploadAvatarFile,
+        /* 面板桥 */
+        openPanel: openPanel,
+        closePanel: closePanel,
     };
 
     // ============================================
@@ -470,6 +842,7 @@
         loadState();
         injectStyles();
         applySizeVar();
+        addMenuButton();
         hookEvents();
         applyInjection();
         scanAll();

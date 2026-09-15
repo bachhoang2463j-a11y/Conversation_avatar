@@ -28,9 +28,13 @@
   .case .detail { color: #bbb; font-size: 11px; white-space: pre-wrap; font-family: Consolas, monospace; }
   #stub-info, #status { font-size: 12px; color: #9a9; font-family: Consolas, monospace; white-space: pre-wrap; }
   #log { font-size: 11px; color: #888; max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: Consolas, monospace; border: 1px solid #2a2e36; padding: 4px; }
+  /* 假魔法棒菜单容器 */
+  #extensionsMenu { position: fixed; top: 8px; left: 8px; z-index: 5; display: flex; gap: 6px; }
+  #extensionsMenu .menu_button { background: #2d5f8a; color: #fff; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; user-select: none; }
 </style>
 </head>
 <body>
+<div id="extensionsMenu"></div>
 <div id="chat-wrap"><div id="chat"></div></div>
 <div id="panel">
   <h3>情绪头像 mock harness</h3>
@@ -77,6 +81,12 @@ window.__chat = [];
 /* 收集页面错误，供用例断言加载零报错 */
 window.__errors = [];
 window.addEventListener('error', function (e) { window.__errors.push(e.message); });
+
+/* prompt/confirm 桩：默认取消/确认，用例按需设置 __promptValue / __confirmValue */
+window.__promptValue = null;
+window.prompt = function () { return window.__promptValue; };
+window.__confirmValue = true;
+window.confirm = function () { return window.__confirmValue; };
 
 function __log(msg) {
   var el = document.getElementById('log');
@@ -314,14 +324,15 @@ test('M2-4 总开关关闭撤销、开启恢复', function () {
 });
 
 /* ---------- M3 用例：IndexedDB 存储层 ---------- */
-function __canvasBlob(hue, label) {
+function __canvasBlob(hue, label, w, h) {
+  w = w || 96; h = h || 96;
   return new Promise(function (resolve) {
-    var c = document.createElement('canvas'); c.width = 96; c.height = 96;
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
     var ctx = c.getContext('2d');
-    ctx.fillStyle = 'hsl(' + hue + ',55%,45%)'; ctx.fillRect(0, 0, 96, 96);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = 'hsl(' + hue + ',55%,45%)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 16px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label, 48, 48, 88);
+    ctx.fillText(label, w / 2, h / 2, Math.min(w, h) * 0.9);
     c.toBlob(resolve, 'image/png');
   });
 }
@@ -376,6 +387,111 @@ test('M3-3 删除单张清理缓存', function () {
   });
 });
 
+/* ---------- M4 用例：管理面板 ---------- */
+test('M4-1 魔法棒菜单入口已注入', function () {
+  var btn = document.getElementById('eca-menu-btn');
+  assert(btn, '未找到菜单按钮');
+  assert(document.getElementById('extensionsMenu').contains(btn), '按钮不在 extensionsMenu 内');
+});
+test('M4-2 面板打开/关闭与角色列表渲染', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克', '罗兰']);
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  assert(panel && panel.style.display === 'flex', '面板未显示');
+  var items = panel.querySelectorAll('.eca-char-item');
+  assert(items.length === 2, '角色列表数量错误：' + items.length);
+  assert(items[0].textContent.indexOf('弗兰克') !== -1, '列表内容错误');
+  var cells = panel.querySelectorAll('.eca-cell');
+  assert(cells.length === 10, '情绪格应为 10 个：' + cells.length);
+  window.EmoAvatar.closePanel();
+  assert(panel.style.display === 'none', '面板未关闭');
+});
+test('M4-3 新增角色流程（名单+注入+面板同步）', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  window.__promptValue = '新角色A';
+  window.EmoAvatar.openPanel();
+  document.getElementById('eca-add-char').click();
+  assert(window.EmoAvatar.getCharacters().indexOf('新角色A') !== -1, '角色未入列表');
+  var p = __lastInject();
+  assert(p && p.prompts[0].content.indexOf('新角色A') !== -1, '注入名单未更新');
+  var items = document.querySelectorAll('#eca-char-list .eca-char-item');
+  assert(items.length === 2 && items[1].textContent.indexOf('新角色A') !== -1, '面板列表未刷新');
+});
+test('M4-4 单格上传降采样入库', function () {
+  window.EmoAvatar.setCharactersPersist(['上传侠']);
+  return __canvasBlob(60, '原图', 600, 400).then(function (blob) {
+    var file = new File([blob], 'test.png', { type: 'image/png' });
+    return window.EmoAvatar.uploadAvatarFile('上传侠', '惊讶', file);
+  }).then(function () {
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    var rec = records.filter(function (r) { return r.id === '上传侠_惊讶'; })[0];
+    assert(rec, '未入库');
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.src = URL.createObjectURL(rec.imageBlob);
+    });
+  }).then(function (img) {
+    assert(img.naturalWidth === 256, '长边应降采样到 256，实际宽 ' + img.naturalWidth);
+    assert(img.naturalHeight <= 256, '高度超标：' + img.naturalHeight);
+  });
+});
+test('M4-5 尺寸调节即时生效', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{弗兰克(微笑)}测', false);
+  window.EmoAvatar.scanAll();
+  var img = mes.querySelector('img.eca-avatar');
+  var h1 = img.getBoundingClientRect().height;
+  window.EmoAvatar.setSize(4);
+  var h2 = img.getBoundingClientRect().height;
+  assert(Math.round(h1) === 40, '默认高度错误：' + h1);
+  assert(Math.round(h2) === 64, '调节后高度错误：' + h2);
+  window.EmoAvatar.setSize(2.5);
+});
+test('M4-6 面板开关与注入状态同步', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  window.EmoAvatar.setEnabled(true);
+  window.EmoAvatar.openPanel();
+  var cb = document.getElementById('eca-enabled');
+  assert(cb.checked === true, '开关初始状态错误');
+  window.__injectCalls = [];
+  cb.checked = false;
+  cb.dispatchEvent(new Event('change', { bubbles: true }));
+  assert(window.__injectCalls.some(function (c) { return c.uninjectAll; }), '应撤销注入');
+  window.EmoAvatar.setEnabled(true);
+  assert(document.getElementById('eca-enabled').checked === true, '桥操作后面板未同步');
+});
+test('M4-7 删除角色清理素材与注入', function () {
+  window.EmoAvatar.setCharactersPersist(['删除侠2', '保留侠']);
+  return __canvasBlob(70, 'x').then(function (blob) {
+    return window.EmoAvatar.saveAvatar('删除侠2', '默认', blob);
+  }).then(function () {
+    return window.EmoAvatar.removeCharacter('删除侠2');
+  }).then(function () {
+    assert(window.EmoAvatar.getCharacters().indexOf('删除侠2') === -1, '列表未移除');
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    assert(!records.some(function (r) { return r.character === '删除侠2'; }), '素材未删除');
+    var p = __lastInject();
+    assert(p && p.prompts[0].content.indexOf('删除侠2') === -1, '注入名单未更新');
+  });
+});
+test('M4-8 改名迁移素材键', function () {
+  window.EmoAvatar.setCharactersPersist(['旧名侠']);
+  return __canvasBlob(80, 'y').then(function (blob) {
+    return window.EmoAvatar.saveAvatar('旧名侠', '微笑', blob);
+  }).then(function () {
+    return window.EmoAvatar.renameCharacter('旧名侠', '新名侠');
+  }).then(function () {
+    assert(window.EmoAvatar.getCharacters()[0] === '新名侠', '列表改名失败');
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    assert(records.some(function (r) { return r.id === '新名侠_微笑'; }), '素材键未迁移');
+    assert(!records.some(function (r) { return r.character === '旧名侠'; }), '旧键残留');
+  });
+});
+
 /* ---------- 操作按钮 ---------- */
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
@@ -414,6 +530,8 @@ __btn('触发 CHAT_CHANGED', function () { window.__trigger('chat_changed', 'tes
 __btn('清空聊天与注入记录', function () {
   document.getElementById('chat').innerHTML = '';
   window.__chat = []; window.__injectCalls = [];
+  try { localStorage.removeItem('emoavatar_characters'); } catch (e) {}
+  window.EmoAvatar.setCharacters([]);
   __log('已清空');
 }, true);
 __btn('清空头像素材库', async function () {
