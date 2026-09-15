@@ -313,6 +313,69 @@ test('M2-4 总开关关闭撤销、开启恢复', function () {
   assert(__lastInject() && __lastInject().prompts, '开启后应恢复注入');
 });
 
+/* ---------- M3 用例：IndexedDB 存储层 ---------- */
+function __canvasBlob(hue, label) {
+  return new Promise(function (resolve) {
+    var c = document.createElement('canvas'); c.width = 96; c.height = 96;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = 'hsl(' + hue + ',55%,45%)'; ctx.fillRect(0, 0, 96, 96);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, 48, 48, 88);
+    c.toBlob(resolve, 'image/png');
+  });
+}
+test('M3-1 存取往返与预热', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['测试甲']);
+  return __canvasBlob(120, '测试甲·微笑').then(function (blob) {
+    return window.EmoAvatar.saveAvatar('测试甲', '微笑', blob);
+  }).then(function () {
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    var rec = records.filter(function (r) { return r.id === '测试甲_微笑'; })[0];
+    assert(rec, '记录未入库');
+    assert(rec.imageBlob instanceof Blob, 'imageBlob 不是 Blob');
+    window.EmoAvatar.clearMemoryCache();
+    return window.EmoAvatar.preloadAvatars();
+  }).then(function () {
+    var mes = __addFloor('{测试甲(微笑)}“到了。”', false);
+    window.EmoAvatar.scanAll();
+    var img = mes.querySelector('img.eca-avatar');
+    assert(img, '未渲染头像');
+    assert(img.src.indexOf('blob:') === 0, '应使用 blob URL：' + img.src.slice(0, 20));
+  });
+});
+test('M3-2 同键覆盖不产生重复记录', function () {
+  return __canvasBlob(10, 'v1').then(function (b1) {
+    return window.EmoAvatar.saveAvatar('覆盖侠', '默认', b1);
+  }).then(function () {
+    return __canvasBlob(20, 'v2');
+  }).then(function (b2) {
+    return window.EmoAvatar.saveAvatar('覆盖侠', '默认', b2);
+  }).then(function () {
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    var n = records.filter(function (r) { return r.id === '覆盖侠_默认'; }).length;
+    assert(n === 1, '同键覆盖后应只有 1 条记录，实际 ' + n);
+  });
+});
+test('M3-3 删除单张清理缓存', function () {
+  return __canvasBlob(30, '删').then(function (blob) {
+    return window.EmoAvatar.saveAvatar('删除侠', '大笑', blob);
+  }).then(function () {
+    return window.EmoAvatar.deleteAvatar('删除侠', '大笑');
+  }).then(function () {
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    assert(!records.some(function (r) { return r.id === '删除侠_大笑'; }), '记录未删除');
+    window.EmoAvatar.setCharacters(window.EmoAvatar.getCharacters().concat(['删除侠']));
+    var mes = __addFloor('{删除侠(大笑)}gone', false);
+    window.EmoAvatar.scanAll();
+    assert(mes.querySelector('.eca-placeholder'), '缓存清理后应回落占位');
+  });
+});
+
 /* ---------- 操作按钮 ---------- */
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
@@ -352,6 +415,12 @@ __btn('清空聊天与注入记录', function () {
   document.getElementById('chat').innerHTML = '';
   window.__chat = []; window.__injectCalls = [];
   __log('已清空');
+}, true);
+__btn('清空头像素材库', async function () {
+  var records = await window.EmoAvatar.getAllAvatarRecords();
+  for (var r of records) await window.EmoAvatar.deleteAvatar(r.character, r.emotion);
+  window.EmoAvatar.clearMemoryCache();
+  __log('素材库已清空（' + records.length + ' 条）');
 }, true);
 
 /* ---------- 用例运行器（支持异步用例） ---------- */

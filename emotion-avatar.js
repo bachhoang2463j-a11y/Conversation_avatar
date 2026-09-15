@@ -301,8 +301,131 @@
     }
 
     // ============================================
-    // IndexedDB 存储层（M3）
+    // IndexedDB 存储层（M3）：主键 `角色名_情绪`，全局角色库（不绑角色卡）
     // ============================================
+    let dbPromise = null;
+
+    function initDB() {
+        if (dbPromise) return dbPromise;
+        dbPromise = new Promise(function (resolve, reject) {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onupgradeneeded = function () {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(STORE_AVATARS)) {
+                    db.createObjectStore(STORE_AVATARS, { keyPath: 'id' })
+                        .createIndex('character', 'character', { unique: false });
+                }
+            };
+            request.onsuccess = function () { resolve(request.result); };
+            request.onerror = function () { reject(request.error); };
+        });
+        return dbPromise;
+    }
+
+    function createBlobUrl(blob) {
+        return (topWindow.URL || URL).createObjectURL(blob);
+    }
+
+    /** 只 revoke 自己创建的 blob: URL，dataURL（调试种子）不动 */
+    function revokeCacheUrl(url) {
+        if (typeof url === 'string' && url.indexOf('blob:') === 0) {
+            try { (topWindow.URL || URL).revokeObjectURL(url); } catch (e) { /* 已失效 */ }
+        }
+    }
+
+    function txStore(mode) {
+        return initDB().then(function (db) {
+            return db.transaction(STORE_AVATARS, mode).objectStore(STORE_AVATARS);
+        });
+    }
+
+    /** 保存并同步更新内存缓存（覆盖时 revoke 旧 URL） */
+    function saveAvatar(character, emotion, blob) {
+        const id = character + '_' + emotion;
+        return txStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const request = store.put({
+                    id: id,
+                    character: character,
+                    emotion: emotion,
+                    imageBlob: blob,
+                    lastModified: Date.now(),
+                });
+                request.onsuccess = function () {
+                    revokeCacheUrl(avatarCache.get(id));
+                    avatarCache.set(id, createBlobUrl(blob));
+                    resolve();
+                };
+                request.onerror = function () { reject(request.error); };
+            });
+        });
+    }
+
+    function deleteAvatar(character, emotion) {
+        const id = character + '_' + emotion;
+        return txStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const request = store.delete(id);
+                request.onsuccess = function () {
+                    revokeCacheUrl(avatarCache.get(id));
+                    avatarCache.delete(id);
+                    resolve();
+                };
+                request.onerror = function () { reject(request.error); };
+            });
+        });
+    }
+
+    function getAllAvatarRecords() {
+        return txStore('readonly').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const request = store.getAll();
+                request.onsuccess = function () { resolve(request.result || []); };
+                request.onerror = function () { reject(request.error); };
+            });
+        });
+    }
+
+    /** 删除角色全部头像（角色移除时用），返回删除条数 */
+    function deleteCharacterAvatars(character) {
+        return txStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const request = store.index('character').getAllKeys(character);
+                request.onsuccess = function () {
+                    const keys = request.result || [];
+                    keys.forEach(function (key) {
+                        revokeCacheUrl(avatarCache.get(key));
+                        avatarCache.delete(key);
+                        store.delete(key);
+                    });
+                    resolve(keys.length);
+                };
+                request.onerror = function () { reject(request.error); };
+            });
+        });
+    }
+
+    /** 角色改名：迁移该角色全部头像的记录与缓存键 */
+    function renameCharacterAvatars(oldName, newName) {
+        return getAllAvatarRecords().then(function (records) {
+            const mine = records.filter(function (r) { return r.character === oldName; });
+            return Promise.all(mine.map(function (r) {
+                return saveAvatar(newName, r.emotion, r.imageBlob)
+                    .then(function () { return deleteAvatar(oldName, r.emotion); });
+            }));
+        });
+    }
+
+    /** 启动预热：全量载入内存缓存，渲染替换零 await */
+    function preloadAvatars() {
+        return getAllAvatarRecords().then(function (records) {
+            records.forEach(function (r) {
+                if (!avatarCache.has(r.id)) avatarCache.set(r.id, createBlobUrl(r.imageBlob));
+            });
+        }).catch(function (e) {
+            console.warn('[' + SCRIPT_NAME + '] 头像缓存预热失败:', e);
+        });
+    }
 
     // ============================================
     // 管理面板（M4）
@@ -327,6 +450,17 @@
         setSize: setSize,
         scanAll: scanAll,
         applyInjection: applyInjection,
+        /* 存储层桥（面板与 harness 共用） */
+        saveAvatar: saveAvatar,
+        deleteAvatar: deleteAvatar,
+        deleteCharacterAvatars: deleteCharacterAvatars,
+        renameCharacterAvatars: renameCharacterAvatars,
+        getAllAvatarRecords: getAllAvatarRecords,
+        preloadAvatars: preloadAvatars,
+        clearMemoryCache() {
+            avatarCache.forEach(function (url) { revokeCacheUrl(url); });
+            avatarCache.clear();
+        },
     };
 
     // ============================================
@@ -339,6 +473,8 @@
         hookEvents();
         applyInjection();
         scanAll();
+        // 预热完成后重扫一次，让已有楼层换上真实头像
+        preloadAvatars().then(scanAll);
     }
     if (doc.readyState === 'loading') {
         doc.addEventListener('DOMContentLoaded', init, { once: true });
