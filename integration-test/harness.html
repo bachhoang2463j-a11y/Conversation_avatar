@@ -492,6 +492,114 @@ test('M4-8 改名迁移素材键', function () {
   });
 });
 
+/* ---------- M5 用例：单图批量网格导入 ---------- */
+function __loadImg(src) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image();
+    img.onload = function () { resolve(img); };
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+function __gridSheet(w, h, cols, rows) {
+  var c = document.createElement('canvas'); c.width = w; c.height = h;
+  var ctx = c.getContext('2d');
+  var cw = w / cols, ch = h / rows, i = 0;
+  for (var r = 0; r < rows; r++) for (var col = 0; col < cols; col++) {
+    ctx.fillStyle = 'hsl(' + (i * 36) + ',70%,50%)';
+    ctx.fillRect(col * cw, r * ch, cw, ch);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), col * cw + cw / 2, r * ch + ch / 2);
+    i++;
+  }
+  return c.toDataURL('image/png');
+}
+test('M5-1 autoDetectGrid 按宽高比猜行列', function () {
+  var d = window.EmoAvatar.autoDetectGrid;
+  var t1 = d({ width: 1000, height: 200 });
+  assert(t1.rows === 1 && t1.cols === 6, '宽图(5:1)猜测错误: ' + JSON.stringify(t1));
+  var t2 = d({ width: 900, height: 300 });
+  assert(t2.rows === 1 && t2.cols === 5, '3:1 猜测错误: ' + JSON.stringify(t2));
+  var t2b = d({ width: 800, height: 400 });
+  assert(t2b.rows === 2 && t2b.cols === 4, '2:1 猜测错误: ' + JSON.stringify(t2b));
+  var t3 = d({ width: 500, height: 400 });
+  assert(t3.rows === 2 && t3.cols === 3, '1.25:1 猜测错误: ' + JSON.stringify(t3));
+  var t4 = d({ width: 400, height: 400 });
+  assert(t4.rows === 3 && t4.cols === 3, '方图猜测错误: ' + JSON.stringify(t4));
+  var t5 = d({ width: 200, height: 1000 });
+  assert(t5.rows === 5 && t5.cols === 2, '高图(1:5)猜测错误: ' + JSON.stringify(t5));
+});
+test('M5-2 切格居中裁剪且不放大', function () {
+  return __loadImg(__gridSheet(200, 100, 2, 1)).then(function (img) {
+    return window.EmoAvatar.sliceGridCell(img, 0, 0, 1, 2, '1:1');
+  }).then(function (blob) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(blob);
+      var img2 = new Image();
+      img2.onload = function () { resolve({ img: img2, url: url }); };
+      img2.src = url;
+    });
+  }).then(function (r) {
+    URL.revokeObjectURL(r.url);
+    assert(r.img.naturalWidth === 100 && r.img.naturalHeight === 100,
+      '100×100 格按 1:1 应输出 100×100：' + r.img.naturalWidth + '×' + r.img.naturalHeight);
+    var c = document.createElement('canvas'); c.width = 100; c.height = 100;
+    var ctx = c.getContext('2d');
+    ctx.drawImage(r.img, 0, 0);
+    var px = ctx.getImageData(10, 10, 1, 1).data;
+    assert(px[0] > 200 && px[1] < 120, '切出的应是第 1 格（红系）：' + px.join(','));
+  });
+});
+test('M5-3 批量导入全流程（2×5 → 10 张入库）', function () {
+  window.EmoAvatar.setCharactersPersist(['批量侠']);
+  return __loadImg(__gridSheet(1000, 200, 5, 2)).then(function (img) {
+    var mappings = window.EmoAvatar.emotions.map(function (emo, i) {
+      return { row: Math.floor(i / 5), col: i % 5, emotion: emo };
+    });
+    return window.EmoAvatar.runBatchImport('批量侠', img, { rows: 2, cols: 5, ratio: '1:1', mappings: mappings });
+  }).then(function (r) {
+    assert(r.saved === 10 && r.failed === 0, '导入结果错误: ' + JSON.stringify(r));
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    var mine = records.filter(function (x) { return x.character === '批量侠'; });
+    assert(mine.length === 10, '应有 10 条记录：' + mine.length);
+    var ids = mine.map(function (x) { return x.id; });
+    window.EmoAvatar.emotions.forEach(function (emo) {
+      assert(ids.indexOf('批量侠_' + emo) !== -1, '缺少 ' + emo);
+    });
+  });
+});
+test('M5-4 面板批量导入按钮与对话框开关', function () {
+  window.EmoAvatar.setCharactersPersist(['面板侠']);
+  window.EmoAvatar.openPanel();
+  var btn = document.getElementById('eca-batch-btn');
+  assert(btn, '面板缺少批量导入按钮');
+  btn.click();
+  var dlg = document.getElementById('eca-batch-panel');
+  assert(dlg && dlg.style.display === 'flex', '批量对话框未打开');
+  assert(dlg.querySelector('#eca-batch-title').textContent.indexOf('面板侠') !== -1, '标题角色错误');
+  dlg.querySelector('.eca-close').click();
+  assert(dlg.style.display === 'none', '对话框未关闭');
+});
+test('M5-5 对话框载图后渲染网格预览与默认映射', function () {
+  window.EmoAvatar.setCharactersPersist(['预览侠']);
+  window.EmoAvatar.openBatchDialogWithImage('预览侠', __gridSheet(1000, 400, 5, 2));
+  return __wait(700).then(function () {
+    var dlg = document.getElementById('eca-batch-panel');
+    assert(dlg.style.display === 'flex', '对话框未打开');
+    assert(dlg.querySelector('#eca-batch-canvas').style.display !== 'none', '网格预览未显示');
+    assert(dlg.querySelector('#eca-batch-rows').textContent === '2', '行数显示错误');
+    assert(dlg.querySelector('#eca-batch-cols').textContent === '5', '列数显示错误');
+    var selects = dlg.querySelectorAll('.eca-bcell select');
+    assert(selects.length === 10, '应有 10 个映射格：' + selects.length);
+    assert(selects[0].value === '默认' && selects[9].value === '害羞', '默认映射顺序错误：' + selects[0].value + '/' + selects[9].value);
+    var thumbs = dlg.querySelectorAll('.eca-bcell img');
+    assert(thumbs.length === 10 && thumbs[0].naturalWidth > 0, '格子缩略图未渲染');
+    window.EmoAvatar.closeBatchDialog();
+  });
+});
+
 /* ---------- 操作按钮 ---------- */
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {

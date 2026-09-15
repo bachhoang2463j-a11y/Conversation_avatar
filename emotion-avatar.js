@@ -52,7 +52,7 @@
     // ============================================
     // 设置与角色登记表（localStorage）
     // ============================================
-    let settings = { enabled: true, size: DEFAULT_SIZE };
+    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1' };
     /** 已登记角色名列表（角色名即主键，全局跨卡跨聊天） */
     let characters = [];
 
@@ -436,11 +436,16 @@
     // 管理面板（M4）：魔法棒菜单入口 + 单弹窗
     // ============================================
     const PANEL_CSS = ''
-        + '#eca-panel{display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.45);align-items:center;justify-content:center;font-size:14px;font-family:system-ui,"Microsoft YaHei",sans-serif;}'
-        + '#eca-panel .eca-modal{width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;background:#23262e;color:#e6e6e6;border:1px solid #3a3f4b;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);}'
-        + '#eca-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #3a3f4b;font-weight:600;}'
-        + '#eca-panel .eca-close{background:none;border:0;color:#999;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;}'
-        + '#eca-panel .eca-close:hover{color:#fff;}'
+        // 两个弹窗（管理面板 / 批量导入）共用的骨架样式
+        + '#eca-panel,#eca-batch-panel{display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.45);align-items:center;justify-content:center;font-size:14px;font-family:system-ui,"Microsoft YaHei",sans-serif;}'
+        + '#eca-batch-panel{z-index:100001;background:rgba(0,0,0,.5);}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;background:#23262e;color:#e6e6e6;border:1px solid #3a3f4b;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);}'
+        + '#eca-batch-panel .eca-modal{width:min(880px,94vw);max-height:90vh;}'
+        + '#eca-panel .eca-header,#eca-batch-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #3a3f4b;font-weight:600;}'
+        + '#eca-panel .eca-close,#eca-batch-panel .eca-close{background:none;border:0;color:#999;font-size:20px;cursor:pointer;line-height:1;padding:0 4px;}'
+        + '#eca-panel .eca-close:hover,#eca-batch-panel .eca-close:hover{color:#fff;}'
+        + '#eca-panel .eca-footer,#eca-batch-panel .eca-footer{display:flex;align-items:center;gap:18px;padding:10px 16px;border-top:1px solid #3a3f4b;flex-wrap:wrap;}'
+        // 管理面板
         + '#eca-panel .eca-body{display:flex;min-height:320px;overflow:hidden;}'
         + '#eca-panel .eca-side{width:170px;border-right:1px solid #3a3f4b;padding:10px;display:flex;flex-direction:column;gap:6px;overflow-y:auto;}'
         + '#eca-panel .eca-side-title{color:#8ab;font-size:12px;}'
@@ -464,13 +469,32 @@
         + '#eca-panel .eca-cell-img img{max-height:72px;max-width:100%;border-radius:6px;}'
         + '#eca-panel .eca-cell-empty{width:56px;height:56px;border:1px dashed #555;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#666;font-size:11px;}'
         + '#eca-panel .eca-cell-name{font-size:12px;color:#aab;}'
-        + '#eca-panel .eca-footer{display:flex;align-items:center;gap:18px;padding:10px 16px;border-top:1px solid #3a3f4b;flex-wrap:wrap;}'
         + '#eca-panel .eca-switch{display:flex;align-items:center;gap:6px;cursor:pointer;}'
         + '#eca-panel .eca-size{display:flex;align-items:center;gap:8px;}'
         + '#eca-panel .eca-size input[type=range]{width:140px;}'
         + '#eca-panel .eca-size-val{min-width:3.5em;color:#9bd;}'
         + '#eca-panel .eca-size-preview{margin-left:auto;display:flex;align-items:center;gap:8px;color:#889;}'
-        + '.eca-toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:#2d5f8a;color:#fff;padding:8px 18px;border-radius:6px;z-index:100000;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .4s;}'
+        // 批量导入对话框
+        + '#eca-batch-panel .eca-batch-body{padding:12px 16px;overflow-y:auto;}'
+        + '#eca-batch-panel .eca-batch-canvas-wrap{background:#181a1f;border:1px dashed #444;border-radius:8px;padding:8px;text-align:center;cursor:pointer;}'
+        + '#eca-batch-panel .eca-batch-canvas-wrap canvas{max-width:100%;height:auto;}'
+        + '#eca-batch-panel .eca-batch-hint{color:#889;padding:24px 0;}'
+        + '#eca-batch-panel .eca-batch-ctrl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0;}'
+        + '#eca-batch-panel .eca-stepper{display:flex;align-items:center;gap:4px;color:#aab;}'
+        + '#eca-batch-panel .eca-stepper b{min-width:1.2em;text-align:center;color:#cde;}'
+        + '#eca-batch-panel .eca-batch-ctrl button{padding:2px 9px;border-radius:4px;border:1px solid #4a5160;background:#2a2e37;color:#cde;cursor:pointer;}'
+        + '#eca-batch-panel .eca-batch-ctrl button:hover{background:#323744;}'
+        + '#eca-batch-panel .eca-batch-ctrl select,#eca-batch-panel .eca-bcell select{background:#2a2e37;color:#cde;border:1px solid #4a5160;border-radius:4px;padding:2px 6px;}'
+        + '#eca-batch-panel .eca-batch-mapping{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;}'
+        + '#eca-batch-panel .eca-bcell{border:1px solid #3a3f4b;border-radius:8px;padding:5px;text-align:center;background:#282c35;}'
+        + '#eca-batch-panel .eca-bcell.skipped{opacity:.45;}'
+        + '#eca-batch-panel .eca-bcell img{width:100%;height:60px;object-fit:contain;border-radius:4px;background:#181a1f;}'
+        + '#eca-batch-panel .eca-bcell select{width:100%;margin-top:4px;font-size:12px;}'
+        + '#eca-batch-panel .eca-primary{background:#2d5f8a;color:#fff;border:0;border-radius:6px;padding:6px 18px;cursor:pointer;font-size:13px;}'
+        + '#eca-batch-panel .eca-primary:hover{background:#3a78ab;}'
+        + '#eca-batch-panel .eca-primary:disabled{opacity:.5;cursor:wait;}'
+        // toast
+        + '.eca-toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:#2d5f8a;color:#fff;padding:8px 18px;border-radius:6px;z-index:100002;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .4s;}'
         + '.eca-toast.eca-toast-warn{background:#8a4a2d;}'
         + '.eca-toast.eca-toast-out{opacity:0;}';
 
@@ -624,6 +648,8 @@
             if (del) { removeCharacterFlow(del.dataset.name); return; }
             const rename = target.closest ? target.closest('#eca-rename-btn') : null;
             if (rename) { renameCharacterFlow(selectedCharacter); return; }
+            const batch = target.closest ? target.closest('#eca-batch-btn') : null;
+            if (batch) { openBatchDialog(selectedCharacter); return; }
             const item = target.closest ? target.closest('.eca-char-item') : null;
             if (item && item.dataset.name) {
                 selectedCharacter = item.dataset.name;
@@ -732,6 +758,7 @@
             }).join('');
             detail.innerHTML = ''
                 + '<div class="eca-detail-head"><b>' + escapeHtml(selectedCharacter) + '</b>'
+                + '<button class="eca-mini-btn" id="eca-batch-btn">批量导入大图</button>'
                 + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button></div>'
                 + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；十种情绪缺图时自动回落「默认」</div>'
                 + '<div class="eca-grid">' + cells + '</div>';
@@ -795,8 +822,375 @@
     }
 
     // ============================================
-    // 单图批量网格导入（M5）
+    // 单图批量网格导入（M5）：移植自 galgame v2.2，核心逻辑与对话框 UI 分离
     // ============================================
+    const CROP_RATIOS = ['1:1', '2:3', '3:4', '4:5', '9:16'];
+
+    /** 按宽高比猜网格行列（galgame v2.2 同款），行 1-5、列 1-6 */
+    function autoDetectGrid(img) {
+        const ratio = img.width / img.height;
+        let rows, cols;
+        if (ratio > 2.5) { rows = 1; cols = Math.round(ratio * 1.5); }
+        else if (ratio > 1.8) { rows = 2; cols = Math.round(ratio * 2); }
+        else if (ratio > 1.2) { rows = 2; cols = 3; }
+        else if (ratio > 0.8) { rows = 3; cols = 3; }
+        else { rows = Math.round(3 / ratio); cols = 2; }
+        return { rows: Math.max(1, Math.min(5, rows)), cols: Math.max(1, Math.min(6, cols)) };
+    }
+
+    /** '2:3' → 2/3（宽/高），非法输入回落 1 */
+    function parseCropRatio(label) {
+        const m = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(String(label || ''));
+        const ratio = m ? parseFloat(m[1]) / parseFloat(m[2]) : 1;
+        return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    }
+
+    /**
+     * 从合集大图切一个格子：等分定位 → 居中裁剪到目标比例 → 输出 PNG Blob
+     * 输出长边 = min(256, 源裁剪区长边)，不做放大
+     */
+    function sliceGridCell(img, row, col, rows, cols, ratioLabel) {
+        const dstAspect = parseCropRatio(ratioLabel);
+        const cellWidth = img.width / cols;
+        const cellHeight = img.height / rows;
+        const sx = col * cellWidth;
+        const sy = row * cellHeight;
+        let cropWidth = cellWidth, cropHeight = cellHeight, cropX = 0, cropY = 0;
+        if (cellWidth / cellHeight > dstAspect) {
+            cropWidth = cellHeight * dstAspect;
+            cropX = (cellWidth - cropWidth) / 2;
+        } else {
+            cropHeight = cellWidth / dstAspect;
+            cropY = (cellHeight - cropHeight) / 2;
+        }
+        const longEdge = Math.max(1, Math.min(256, Math.round(Math.max(cropWidth, cropHeight))));
+        const outW = Math.max(1, Math.round(dstAspect >= 1 ? longEdge : longEdge * dstAspect));
+        const outH = Math.max(1, Math.round(dstAspect >= 1 ? longEdge / dstAspect : longEdge));
+        const canvas = doc.createElement('canvas');
+        canvas.width = outW; canvas.height = outH;
+        canvas.getContext('2d').drawImage(img, sx + cropX, sy + cropY, cropWidth, cropHeight, 0, 0, outW, outH);
+        return new Promise(function (resolve, reject) {
+            canvas.toBlob(function (blob) { blob ? resolve(blob) : reject(new Error('切图编码失败')); }, 'image/png');
+        });
+    }
+
+    /**
+     * 批量导入核心（对话框只负责收集参数）：
+     * config = { rows, cols, ratio, mappings: [{row, col, emotion}] }，返回 {saved, failed}
+     */
+    function runBatchImport(character, img, config) {
+        const rows = config.rows;
+        const cols = config.cols;
+        const ratio = config.ratio || '1:1';
+        const mappings = (config.mappings || []).filter(function (m) {
+            return m && m.emotion && EMOTION_SET.has(m.emotion);
+        });
+        let saved = 0, failed = 0;
+        let chain = Promise.resolve();
+        mappings.forEach(function (m) {
+            chain = chain.then(function () {
+                return sliceGridCell(img, m.row, m.col, rows, cols, ratio)
+                    .then(function (blob) { return saveAvatar(character, m.emotion, blob); })
+                    .then(function () { saved++; })
+                    .catch(function (e) {
+                        failed++;
+                        console.warn('[' + SCRIPT_NAME + '] 批量导入失败:', character, m.emotion, e);
+                    });
+            });
+        });
+        return chain.then(function () { return { saved: saved, failed: failed }; });
+    }
+
+    // ---------- 批量导入对话框 ----------
+    let batchEl = null;
+    let batchFileInput = null;
+    let batchCharacter = null;
+    let batchImage = null;
+    let batchRows = 2, batchCols = 5;
+    let batchMappings = [];
+
+    function openBatchDialog(character) {
+        ensurePanelStyles();
+        if (!character) { toast('请先选择角色', true); return; }
+        batchCharacter = character;
+        if (!batchEl) {
+            batchEl = buildBatchSkeleton();
+            doc.body.appendChild(batchEl);
+        }
+        batchEl.querySelector('#eca-batch-title').textContent = '批量导入「' + character + '」';
+        const ratioSel = batchEl.querySelector('#eca-batch-ratio');
+        ratioSel.innerHTML = CROP_RATIOS.map(function (r) {
+            const cur = settings.batchCropRatio || '1:1';
+            return '<option value="' + r + '"' + (r === cur ? ' selected' : '') + '>' + r + '</option>';
+        }).join('');
+        resetBatchImage();
+        batchEl.style.display = 'flex';
+    }
+
+    function closeBatchDialog() {
+        if (batchEl) batchEl.style.display = 'none';
+    }
+
+    function resetBatchImage() {
+        batchImage = null;
+        batchMappings = [];
+        if (!batchEl) return;
+        batchEl.querySelector('#eca-batch-hint').style.display = '';
+        batchEl.querySelector('#eca-batch-canvas').style.display = 'none';
+        batchEl.querySelector('#eca-batch-ctrl').style.display = 'none';
+        batchEl.querySelector('#eca-batch-mapping').style.display = 'none';
+        batchEl.querySelector('#eca-batch-tip').textContent = '';
+    }
+
+    function loadBatchImage(img) {
+        batchImage = img;
+        const detected = autoDetectGrid(img);
+        batchRows = detected.rows;
+        batchCols = detected.cols;
+        renderBatchAll();
+    }
+
+    function loadBatchImageFromFile(file) {
+        const reader = new topWindow.FileReader();
+        reader.onload = function () {
+            const img = new topWindow.Image();
+            img.onload = function () { loadBatchImage(img); };
+            img.onerror = function () { toast('图片加载失败', true); };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function renderBatchAll() {
+        if (!batchEl || !batchImage) return;
+        batchEl.querySelector('#eca-batch-hint').style.display = 'none';
+        batchEl.querySelector('#eca-batch-canvas').style.display = '';
+        batchEl.querySelector('#eca-batch-ctrl').style.display = '';
+        batchEl.querySelector('#eca-batch-mapping').style.display = '';
+        batchEl.querySelector('#eca-batch-rows').textContent = String(batchRows);
+        batchEl.querySelector('#eca-batch-cols').textContent = String(batchCols);
+        renderBatchPreview();
+        rebuildBatchMapping();
+    }
+
+    /** 网格预览：缩放绘制 + 青色虚线 + 序号圆点（galgame v2.2 同款画法） */
+    function renderBatchPreview() {
+        const canvas = batchEl.querySelector('#eca-batch-canvas');
+        const wrap = batchEl.querySelector('#eca-batch-drop');
+        const maxWidth = Math.max(200, (wrap.clientWidth || 800) - 20);
+        const maxHeight = 320;
+        const scale = Math.min(maxWidth / batchImage.width, maxHeight / batchImage.height, 1);
+        const dw = batchImage.width * scale;
+        const dh = batchImage.height * scale;
+        canvas.width = dw; canvas.height = dh;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(batchImage, 0, 0, dw, dh);
+        ctx.strokeStyle = '#00d2ff';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        const cw = dw / batchCols, ch = dh / batchRows;
+        for (let i = 1; i < batchCols; i++) {
+            ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, dh); ctx.stroke();
+        }
+        for (let i = 1; i < batchRows; i++) {
+            ctx.beginPath(); ctx.moveTo(0, i * ch); ctx.lineTo(dw, i * ch); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.font = 'bold 15px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        let index = 0;
+        for (let row = 0; row < batchRows; row++) {
+            for (let col = 0; col < batchCols; col++) {
+                const x = col * cw + cw / 2, y = row * ch + ch / 2;
+                ctx.fillStyle = 'rgba(0,0,0,.6)';
+                ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.fillText(String(index + 1), x, y);
+                index++;
+            }
+        }
+    }
+
+    /** 重建映射：前 10 格按情绪表顺序默认填，超出默认跳过；调整行列会重置（galgame 同款行为） */
+    function rebuildBatchMapping() {
+        const box = batchEl.querySelector('#eca-batch-mapping');
+        const total = batchRows * batchCols;
+        batchMappings = [];
+        let html = '';
+        for (let i = 0; i < total; i++) {
+            const row = Math.floor(i / batchCols);
+            const col = i % batchCols;
+            const emotion = EMOTIONS[i] || '';
+            batchMappings.push({ row: row, col: col, emotion: emotion, skip: !emotion });
+            html += '<div class="eca-bcell' + (emotion ? '' : ' skipped') + '" data-index="' + i + '">'
+                + '<img alt="格 ' + (i + 1) + '" data-index="' + i + '">'
+                + '<select data-index="' + i + '"></select>'
+                + '</div>';
+        }
+        box.innerHTML = html;
+        updateAllBatchSelectOptions();
+        updateBatchTip();
+        // 逐格延迟生成缩略图，避免大图一次性卡顿
+        for (let i = 0; i < total; i++) {
+            setTimeout(function (idx) { renderBatchCellPreview(idx); }, 50 + i * 30, i);
+        }
+    }
+
+    function renderBatchCellPreview(index) {
+        if (!batchImage || !batchEl) return;
+        const img = batchEl.querySelector('.eca-bcell img[data-index="' + index + '"]');
+        if (!img) return;
+        const cw = batchImage.width / batchCols;
+        const ch = batchImage.height / batchRows;
+        const row = Math.floor(index / batchCols);
+        const col = index % batchCols;
+        const c = doc.createElement('canvas');
+        c.width = Math.max(1, Math.round(cw));
+        c.height = Math.max(1, Math.round(ch));
+        c.getContext('2d').drawImage(batchImage, col * cw, row * ch, cw, ch, 0, 0, c.width, c.height);
+        img.src = c.toDataURL();
+    }
+
+    /** 互斥下拉：已被其他格选走的情绪不再出现在选项里 */
+    function updateAllBatchSelectOptions() {
+        const used = {};
+        batchMappings.forEach(function (m) { if (m.emotion) used[m.emotion] = true; });
+        batchEl.querySelectorAll('.eca-bcell select').forEach(function (sel) {
+            const index = parseInt(sel.dataset.index, 10);
+            const current = batchMappings[index].emotion;
+            let html = '<option value="">-- 跳过 --</option>';
+            EMOTIONS.forEach(function (emo) {
+                if (used[emo] && emo !== current) return;
+                html += '<option value="' + escapeHtml(emo) + '"' + (emo === current ? ' selected' : '') + '>' + emo + '</option>';
+            });
+            sel.innerHTML = html;
+        });
+    }
+
+    function updateBatchTip() {
+        if (!batchEl) return;
+        const mapped = batchMappings.filter(function (m) { return !m.skip && m.emotion; }).length;
+        batchEl.querySelector('#eca-batch-tip').textContent =
+            '已映射 ' + mapped + '/' + batchMappings.length + ' 格；保存时按 ' + (settings.batchCropRatio || '1:1')
+            + ' 居中裁剪，长边 ≤256px';
+    }
+
+    function saveBatchFlow() {
+        if (!batchImage || !batchCharacter) { toast('请先上传图片', true); return; }
+        const valid = batchMappings.filter(function (m) { return !m.skip && m.emotion; });
+        if (!valid.length) { toast('请至少为一个格子选择情绪', true); return; }
+        const saveBtn = batchEl.querySelector('#eca-batch-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = '处理中…';
+        runBatchImport(batchCharacter, batchImage, {
+            rows: batchRows,
+            cols: batchCols,
+            ratio: settings.batchCropRatio || '1:1',
+            mappings: valid,
+        }).then(function (r) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '保存全部头像';
+            closeBatchDialog();
+            renderPanel();
+            scanAll();
+            toast('批量导入完成：成功 ' + r.saved + ' 张' + (r.failed ? '，失败 ' + r.failed + ' 张' : ''), r.failed > 0);
+        });
+    }
+
+    function buildBatchSkeleton() {
+        const root = doc.createElement('div');
+        root.id = 'eca-batch-panel';
+        root.innerHTML = ''
+            + '<div class="eca-modal">'
+            + '  <div class="eca-header"><span id="eca-batch-title">批量导入</span><button class="eca-close" title="关闭">×</button></div>'
+            + '  <div class="eca-batch-body">'
+            + '    <div class="eca-batch-canvas-wrap" id="eca-batch-drop" title="点击选择图片（可重新上传）">'
+            + '      <div class="eca-batch-hint" id="eca-batch-hint">点击此处上传表情合集大图（如 2×5、3×3 排列的多表情图，仅支持均匀网格）</div>'
+            + '      <canvas id="eca-batch-canvas" style="display:none;"></canvas>'
+            + '    </div>'
+            + '    <div class="eca-batch-ctrl" id="eca-batch-ctrl" style="display:none;">'
+            + '      <div class="eca-stepper" title="调整行列会重置映射">行 <button data-act="row-dec">−</button><b id="eca-batch-rows">2</b><button data-act="row-inc">＋</button></div>'
+            + '      <div class="eca-stepper" title="调整行列会重置映射">列 <button data-act="col-dec">−</button><b id="eca-batch-cols">5</b><button data-act="col-inc">＋</button></div>'
+            + '      <button id="eca-batch-auto">自动检测</button>'
+            + '      <label class="eca-stepper">裁剪比例 <select id="eca-batch-ratio"></select></label>'
+            + '    </div>'
+            + '    <div class="eca-batch-mapping" id="eca-batch-mapping" style="display:none;"></div>'
+            + '  </div>'
+            + '  <div class="eca-footer">'
+            + '    <span class="eca-detail-tip" id="eca-batch-tip"></span>'
+            + '    <button class="eca-primary" id="eca-batch-save">保存全部头像</button>'
+            + '  </div>'
+            + '</div>';
+        batchFileInput = doc.createElement('input');
+        batchFileInput.type = 'file';
+        batchFileInput.accept = 'image/*';
+        batchFileInput.style.display = 'none';
+        root.appendChild(batchFileInput);
+        bindBatchEvents(root);
+        return root;
+    }
+
+    function bindBatchEvents(root) {
+        root.querySelector('.eca-close').addEventListener('click', closeBatchDialog);
+        root.addEventListener('click', function (ev) {
+            if (ev.target === root) { closeBatchDialog(); return; }
+            if (ev.target.closest && ev.target.closest('#eca-batch-drop')) {
+                batchFileInput.click();
+                return;
+            }
+            const step = ev.target.closest ? ev.target.closest('.eca-batch-ctrl button[data-act]') : null;
+            if (step) {
+                const act = step.dataset.act;
+                if (act === 'row-inc' && batchRows < 5) batchRows++;
+                if (act === 'row-dec' && batchRows > 1) batchRows--;
+                if (act === 'col-inc' && batchCols < 6) batchCols++;
+                if (act === 'col-dec' && batchCols > 1) batchCols--;
+                renderBatchAll();
+                return;
+            }
+            if (ev.target.closest && ev.target.closest('#eca-batch-auto')) {
+                if (batchImage) {
+                    const detected = autoDetectGrid(batchImage);
+                    batchRows = detected.rows;
+                    batchCols = detected.cols;
+                    renderBatchAll();
+                }
+                return;
+            }
+            if (ev.target.closest && ev.target.closest('#eca-batch-save')) {
+                saveBatchFlow();
+            }
+        });
+        batchFileInput.addEventListener('change', function () {
+            const file = batchFileInput.files && batchFileInput.files[0];
+            batchFileInput.value = '';
+            if (file) loadBatchImageFromFile(file);
+        });
+        root.querySelector('#eca-batch-ratio').addEventListener('change', function (ev) {
+            settings.batchCropRatio = ev.target.value;
+            persistSettings();
+            updateBatchTip();
+        });
+        root.querySelector('#eca-batch-mapping').addEventListener('change', function (ev) {
+            const sel = ev.target;
+            if (!sel.dataset || sel.dataset.index === undefined) return;
+            const index = parseInt(sel.dataset.index, 10);
+            batchMappings[index].emotion = sel.value;
+            batchMappings[index].skip = !sel.value;
+            sel.closest('.eca-bcell').classList.toggle('skipped', !sel.value);
+            updateAllBatchSelectOptions();
+            updateBatchTip();
+        });
+    }
+
+    /** 调试桥：带图打开对话框（harness 与控制台排查用） */
+    function openBatchDialogWithImage(character, dataUrl) {
+        openBatchDialog(character);
+        const img = new topWindow.Image();
+        img.onload = function () { loadBatchImage(img); };
+        img.src = dataUrl;
+    }
 
     // ============================================
     // 调试 / 测试桥（控制台排查与 harness 种子用）
@@ -833,6 +1227,13 @@
         /* 面板桥 */
         openPanel: openPanel,
         closePanel: closePanel,
+        /* 批量导入桥 */
+        autoDetectGrid: autoDetectGrid,
+        sliceGridCell: sliceGridCell,
+        runBatchImport: runBatchImport,
+        openBatchDialog: openBatchDialog,
+        closeBatchDialog: closeBatchDialog,
+        openBatchDialogWithImage: openBatchDialogWithImage,
     };
 
     // ============================================
