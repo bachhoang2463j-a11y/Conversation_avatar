@@ -129,6 +129,22 @@ function __btn(label, fn, warn) {
 var TESTS = [];
 function test(name, fn) { TESTS.push({ name: name, run: fn }); }
 function assert(cond, detail) { if (!cond) throw new Error(detail || '断言失败'); }
+function __wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function __resetChat() {
+  document.getElementById('chat').innerHTML = '';
+  window.__chat = [];
+}
+var __seedUrls = {};
+function __seedM1() {
+  window.EmoAvatar.setCharacters(['弗兰克', '罗兰']);
+  window.EmoAvatar.emotions.forEach(function (emo, i) {
+    var url = __makeImg(i * 36, '弗兰克·' + emo);
+    __seedUrls['弗兰克_' + emo] = url;
+    window.EmoAvatar.seedAvatar('弗兰克', emo, url);
+  });
+  __seedUrls['罗兰_默认'] = __makeImg(200, '罗兰·默认');
+  window.EmoAvatar.seedAvatar('罗兰', '默认', __seedUrls['罗兰_默认']);
+}
 
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
@@ -145,7 +161,109 @@ test('M0-3 加载过程零报错', function () {
   assert(window.__errors.length === 0, '错误：' + window.__errors.join(' | '));
 });
 
+/* ---------- M1 用例：解析与渲染 ---------- */
+test('M1-1 完整标签替换为正确头像', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{弗兰克(大笑)}“看不见的敌人？”他咧嘴一笑。', false);
+  window.EmoAvatar.scanAll();
+  var img = mes.querySelector('img.eca-avatar');
+  assert(img, '未生成头像');
+  assert(img.dataset.ecaName === '弗兰克' && img.dataset.ecaEmotion === '大笑', '标记信息错误');
+  assert(img.src === __seedUrls['弗兰克_大笑'], '头像图源错误');
+  assert(mes.textContent.indexOf('{弗兰克') === -1, '标签文本残留');
+  assert(mes.textContent.indexOf('看不见的敌人') !== -1, '正文丢失');
+});
+test('M1-2 与 markdown 渲染共存，只动标签片段', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p><strong>夜色</strong>很浓。{弗兰克(微笑)}“走吧。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var strong = mes.querySelector('strong');
+  assert(strong && strong.textContent === '夜色', 'strong 元素被破坏');
+  assert(mes.querySelectorAll('img.eca-avatar').length === 1, '头像数量错误');
+});
+test('M1-3 未注册角色渲染占位头像', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{路人甲(微笑)}“让让。”', false);
+  window.EmoAvatar.scanAll();
+  var ph = mes.querySelector('.eca-placeholder');
+  assert(ph, '未生成占位头像');
+  assert(ph.title.indexOf('未登记') !== -1, '占位提示错误：' + ph.title);
+  assert(mes.textContent.indexOf('{路人甲') === -1, '标签文本残留');
+});
+test('M1-4 无效情绪词回落默认图', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{弗兰克(狂喜)}“哈！”', false);
+  window.EmoAvatar.scanAll();
+  var img = mes.querySelector('img.eca-avatar');
+  assert(img, '未生成头像');
+  assert(img.src === __seedUrls['弗兰克_默认'], '应回落默认图');
+  assert(img.dataset.ecaEmotion === '狂喜', '应保留原始情绪词供排查');
+});
+test('M1-5 缺图情绪回落默认图', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{罗兰(杀意)}“别动。”', false);
+  window.EmoAvatar.scanAll();
+  var img = mes.querySelector('img.eca-avatar');
+  assert(img && img.src === __seedUrls['罗兰_默认'], '缺图情绪应回落罗兰默认图');
+});
+test('M1-6 代码块内标签不替换', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<pre><code>{弗兰克(大笑)}</code></pre><p>{弗兰克(微笑)}出来吧。</p>', false);
+  window.EmoAvatar.scanAll();
+  var code = mes.querySelector('code');
+  assert(code && code.textContent.indexOf('{弗兰克(大笑)') !== -1, '代码块内文本被改');
+  assert(mes.querySelectorAll('img.eca-avatar').length === 1, '代码块外应正常替换');
+  assert(mes.querySelector('p img.eca-avatar'), '替换位置错误');
+});
+test('M1-7 流式：闭合即换、无重复替换', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('', false);
+  var target = mes.querySelector('.mes_text');
+  var full = '{弗兰克(思考)}“脚印不对。”他蹲下身。{罗兰(默认)}“确实。”';
+  target.textContent = full.slice(0, 5); // 标签未闭合
+  return __wait(450).then(function () {
+    assert(target.querySelectorAll('img.eca-avatar').length === 0, '未闭合标签不应替换');
+    target.textContent = full;
+    return __wait(450);
+  }).then(function () {
+    assert(target.querySelectorAll('img.eca-avatar').length === 2, '闭合后应替换出 2 个头像');
+  });
+});
+test('M1-8 楼层重渲染后自动恢复替换', function () {
+  __resetChat(); __seedM1();
+  var raw = '{弗兰克(惊讶)}“什么声音？！”';
+  var mes = __addFloor(raw, false);
+  window.EmoAvatar.scanAll();
+  assert(mes.querySelector('img.eca-avatar'), '首次替换失败');
+  mes.querySelector('.mes_text').innerHTML = raw; // 模拟酒馆重渲染覆盖 DOM
+  assert(!mes.querySelector('img.eca-avatar'), '重渲染后应回到原始文本');
+  window.__trigger('character_message_rendered', 0);
+  return __wait(200).then(function () {
+    assert(mes.querySelector('img.eca-avatar'), '事件触发后应恢复替换');
+  });
+});
+test('M1-9 渲染不触碰消息数据源', function () {
+  __resetChat(); __seedM1();
+  var raw = '{弗兰克(大笑)}“好。”他笑了。';
+  __addFloor(raw, false);
+  window.EmoAvatar.scanAll();
+  assert(window.__chat[0].mes === raw, 'chat[0].mes 被改写');
+  assert(document.querySelector('.mes .mes_text img.eca-avatar'), '应已替换出头像');
+});
+test('M1-10 重扫幂等', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{弗兰克(微笑)}开头 {弗兰克(愤怒)}结尾', false);
+  window.EmoAvatar.scanAll();
+  var n1 = mes.querySelectorAll('img.eca-avatar').length;
+  window.EmoAvatar.scanAll();
+  window.EmoAvatar.scanAll();
+  var n2 = mes.querySelectorAll('img.eca-avatar').length;
+  assert(n1 === 2, '首次替换数量错误：' + n1);
+  assert(n2 === 2, '重扫产生重复：' + n2);
+});
+
 /* ---------- 操作按钮 ---------- */
+__btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
   __addFloor('{弗兰克(大笑)}“看不见的敌人？”弗兰克咧嘴一笑，那笑容里带着一股嗜血的狠劲。', false);
 });
@@ -185,27 +303,29 @@ __btn('清空聊天与注入记录', function () {
   __log('已清空');
 }, true);
 
-/* ---------- 用例运行器 ---------- */
+/* ---------- 用例运行器（支持异步用例） ---------- */
 document.getElementById('run-tests').onclick = function () {
   var box = document.getElementById('cases');
   box.innerHTML = '';
   var pass = 0, fail = 0;
+  var chain = Promise.resolve();
   TESTS.forEach(function (t) {
-    var div = document.createElement('div');
-    div.className = 'case';
-    try {
-      var detail = t.run();
-      div.classList.add('pass');
-      div.innerHTML = '<span class="name">✔ ' + t.name + '</span>' + (detail ? '<div class="detail">' + detail + '</div>' : '');
-      pass++;
-    } catch (e) {
-      div.classList.add('fail');
-      div.innerHTML = '<span class="name">✘ ' + t.name + '</span><div class="detail">' + (e.message || e) + '</div>';
-      fail++;
-    }
-    box.appendChild(div);
+    chain = chain.then(function () {
+      var div = document.createElement('div');
+      div.className = 'case';
+      box.appendChild(div);
+      return Promise.resolve().then(t.run).then(function (detail) {
+        div.classList.add('pass');
+        div.innerHTML = '<span class="name">✔ ' + t.name + '</span>' + (detail ? '<div class="detail">' + detail + '</div>' : '');
+        pass++;
+      }, function (e) {
+        div.classList.add('fail');
+        div.innerHTML = '<span class="name">✘ ' + t.name + '</span><div class="detail">' + (e.message || e) + '</div>';
+        fail++;
+      });
+    });
   });
-  __log('断言运行：' + pass + ' 通过 / ' + fail + ' 失败');
+  chain.then(function () { __log('断言运行：' + pass + ' 通过 / ' + fail + ' 失败'); refreshPanel(); });
 };
 
 /* ---------- 状态面板 ---------- */
@@ -220,6 +340,7 @@ function refreshPanel() {
     '注入调用：' + window.__injectCalls.length + ' 次';
 }
 refreshPanel();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refreshPanel);
 __log('harness 就绪');
 </script>
 </body>

@@ -70,11 +70,14 @@
         + '.eca-avatar{display:inline-block;height:var(--eca-size,2.5em);width:auto;'
         + 'max-width:calc(var(--eca-size,2.5em)*1.6);object-fit:cover;vertical-align:text-bottom;'
         + 'margin:0 .18em;border-radius:.32em;}'
+        // 占位符不可在自身上改 font-size：height 的 em 会按放大后的字号解析，导致尺寸超标
         + '.eca-avatar.eca-placeholder{width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);'
-        + 'max-width:none;box-sizing:border-box;background:rgba(128,128,128,.28);'
+        + 'max-width:none;box-sizing:border-box;display:inline-flex;align-items:center;'
+        + 'justify-content:center;background:rgba(128,128,128,.28);'
         + 'color:rgba(190,190,190,.75);border:1px solid rgba(128,128,128,.35);border-radius:50%;'
-        + 'text-align:center;line-height:calc(var(--eca-size,2.5em) - 2px);'
-        + 'font-size:calc(var(--eca-size,2.5em)*.5);user-select:none;overflow:hidden;}';
+        + 'user-select:none;overflow:hidden;}'
+        + '.eca-avatar.eca-placeholder::after{content:"?";'
+        + 'font-size:calc(var(--eca-size,2.5em)*.5);}';
 
     function injectStyles() {
         if (doc.getElementById('eca-styles')) return;
@@ -97,8 +100,130 @@
     }
 
     // ============================================
-    // 渲染替换（M1）
+    // 渲染替换（M1）：显示层最小侵入，只动命中文本节点
     // ============================================
+    /** 内存头像缓存：`角色名_情绪` → 图片 src（M1 由调试桥填充，M3 起由 IndexedDB 预热） */
+    const avatarCache = new Map();
+
+    function isRegistered(name) { return characters.indexOf(name) !== -1; }
+
+    /**
+     * 三级容错解析，返回可用于 <img> 的 src，null 表示渲染占位头像：
+     * 未注册 → null；无效情绪/缺图 → 回落该角色"默认"图；默认也缺 → null
+     */
+    function resolveTag(name, emotion) {
+        if (!isRegistered(name)) return null;
+        if (!EMOTION_SET.has(emotion)) emotion = '默认';
+        let src = avatarCache.get(name + '_' + emotion);
+        if (!src && emotion !== '默认') src = avatarCache.get(name + '_默认');
+        return src || null;
+    }
+
+    function buildAvatarEl(name, emotion, src) {
+        if (src) {
+            const img = doc.createElement('img');
+            img.className = 'eca-avatar';
+            img.src = src;
+            img.alt = name + '·' + emotion;
+            img.title = name + '（' + emotion + '）';
+            img.dataset.ecaName = name;
+            img.dataset.ecaEmotion = emotion;
+            return img;
+        }
+        const span = doc.createElement('span');
+        span.className = 'eca-avatar eca-placeholder';
+        span.title = name + (isRegistered(name) ? '（已登记，缺图）' : '（未登记角色）');
+        span.dataset.ecaName = name;
+        span.dataset.ecaEmotion = emotion;
+        return span;
+    }
+
+    /** 替换单个文本节点中的全部完整标签；只切分命中片段，其余文本原样保留 */
+    function processTextNode(node) {
+        const text = node.nodeValue;
+        if (!text || text.indexOf('{') === -1) return;
+        TAG_RE.lastIndex = 0;
+        let match;
+        let frag = null;
+        let lastIdx = 0;
+        while ((match = TAG_RE.exec(text)) !== null) {
+            const name = match[1].trim();
+            const emotion = match[2].trim();
+            if (!name || !emotion) continue; // 畸形标签保留为文本
+            if (frag === null) frag = doc.createDocumentFragment();
+            frag.appendChild(doc.createTextNode(text.slice(lastIdx, match.index)));
+            frag.appendChild(buildAvatarEl(name, emotion, resolveTag(name, emotion)));
+            lastIdx = match.index + match[0].length;
+        }
+        if (frag === null) return;
+        frag.appendChild(doc.createTextNode(text.slice(lastIdx)));
+        node.parentNode.replaceChild(frag, node);
+    }
+
+    /** 遍历一个 .mes_text 的文本节点（跳过 pre/code），先收集后替换，避免遍历中突变 */
+    function processMesText(root) {
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent || parent.closest('pre, code')) return NodeFilter.FILTER_REJECT;
+                return node.nodeValue.indexOf('{') === -1 ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        for (let i = 0; i < nodes.length; i++) processTextNode(nodes[i]);
+    }
+
+    /** 幂等全扫：已替换的标签不在文本节点里，重扫无副作用 */
+    function scanAll() {
+        const list = doc.querySelectorAll('.mes_text');
+        for (let i = 0; i < list.length; i++) processMesText(list[i]);
+    }
+
+    let scanTimer = null;
+    /** 事件触发的重扫，去抖合并（事件可能先于 DOM 更新完成，留一拍再扫） */
+    function scheduleScan() {
+        if (scanTimer !== null) return;
+        scanTimer = setTimeout(function () {
+            scanTimer = null;
+            hookStreamObserver();
+            scanAll();
+        }, 50);
+    }
+
+    /** 流式兜底：#chat MutationObserver 节流扫描（自身替换触发的 mutation 幂等无害） */
+    let streamObserver = null;
+    let streamTimer = null;
+    function hookStreamObserver() {
+        if (streamObserver) return;
+        const chatEl = doc.getElementById('chat');
+        if (!chatEl) return; // #chat 未就绪时由下次 scheduleScan 重试
+        streamObserver = new MutationObserver(function () {
+            if (streamTimer !== null) return;
+            streamTimer = setTimeout(function () {
+                streamTimer = null;
+                scanAll();
+            }, 250);
+        });
+        streamObserver.observe(chatEl, { childList: true, subtree: true, characterData: true });
+    }
+
+    function hookEvents() {
+        [
+            'APP_READY',
+            'CHARACTER_MESSAGE_RENDERED',
+            'USER_MESSAGE_RENDERED',
+            'MESSAGE_EDITED',
+            'MESSAGE_SWIPED',
+            'MESSAGE_RECEIVED',
+            'MORE_MESSAGES_LOADED',
+            'CHAT_CHANGED',
+        ].forEach(function (key) {
+            const ev = Env.events[key];
+            if (ev) Env.on(ev, scheduleScan);
+        });
+        hookStreamObserver();
+    }
 
     // ============================================
     // 提示词注入（M2）
@@ -122,6 +247,12 @@
     topWindow.EmoAvatar = {
         version: VERSION,
         emotions: EMOTIONS.slice(),
+        /** 调试/harness 桥：直接向内存缓存塞头像（不落库） */
+        seedAvatar(name, emotion, src) { avatarCache.set(name + '_' + emotion, src); },
+        /** 调试/harness 桥：整体替换登记名单（不落 localStorage） */
+        setCharacters(list) { characters = list.slice(); },
+        getCharacters() { return characters.slice(); },
+        scanAll: scanAll,
     };
 
     // ============================================
@@ -131,6 +262,8 @@
         loadState();
         injectStyles();
         applySizeVar();
+        hookEvents();
+        scanAll();
     }
     if (doc.readyState === 'loading') {
         doc.addEventListener('DOMContentLoaded', init, { once: true });
