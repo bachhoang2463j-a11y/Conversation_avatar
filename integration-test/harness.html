@@ -271,7 +271,7 @@ test('M1-10 重扫幂等', function () {
   assert(n1 === 2, '首次替换数量错误：' + n1);
   assert(n2 === 2, '重扫产生重复：' + n2);
 });
-test('M1-11 段首头像两列布局（纯样式，渲染逻辑不变）', function () {
+test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）', function () {
   __resetChat(); __seedM1();
   var mes = __addFloor('<p>{弗兰克(微笑)}他咧嘴一笑，端起了枪。</p><p>无标签的普通段落。</p>', false);
   window.EmoAvatar.scanAll();
@@ -280,49 +280,53 @@ test('M1-11 段首头像两列布局（纯样式，渲染逻辑不变）', funct
   var p2 = ps[1];
   var img = p1.querySelector('img.eca-avatar');
   assert(img, '未渲染头像');
+  // p.eca-p flex 行：头像 + 单个 .eca-text 文字块，两个 flex 项
+  assert(p1.classList.contains('eca-p'), '段首头像段落应加 .eca-p 类');
   var cs1 = getComputedStyle(p1);
-  assert(cs1.position === 'relative', '带头像段落应为 relative：' + cs1.position);
-  var pl = parseFloat(cs1.paddingLeft);
-  assert(pl > 43 && pl < 47, '左列应为 方形容+.3em（约44.8px），实际 ' + pl);
-  assert(getComputedStyle(img).position === 'absolute', '头像应绝对定位到左列');
-  assert(parseFloat(getComputedStyle(img).width) === 40, '列内头像应填满方形容（40px），实际 ' + getComputedStyle(img).width);
-  var rect = img.getBoundingClientRect();
-  var pRect = p1.getBoundingClientRect();
-  assert(Math.abs(rect.left - pRect.left) < 1, '头像应贴住段落左缘');
-  assert(rect.right <= pRect.left + pl + 1, '头像不应超出左列：right=' + rect.right + ' colEnd=' + (pRect.left + pl));
-  // 简单段落（头像 translateY 方案，段落保持 block）：居中的是头像而非文字——
-  // 文字保持正常文本流（首行起点固定），头像 top:50%+translateY(-50%) 对齐段落中心
-  assert(cs1.display === 'block', '段落应保持 block 文本流：' + cs1.display);
-  var aCenter = (rect.top + rect.bottom) / 2, pCenter = (pRect.top + pRect.bottom) / 2;
-  assert(Math.abs(aCenter - pCenter) < 2, '头像未垂直居中：偏差 ' + (aCenter - pCenter) + 'px');
-  // 垂直居中回归锁（两轮真实缺陷）：flex 居中方案会把段落文本与 <q>/<em> 拆成
-  // 并排 flex 项导致整段横排压缩（排版错乱），最终方案是头像 absolute +
-  // top:50%+translateY(-50%)，段落保持 block 文本流。断言三件事：
-  // ①段落始终 block（永不 flex）②含 <q>/<em> 段落头像仍垂直居中 ③长文本正常折行
+  assert(cs1.display === 'flex' && cs1.alignItems === 'center', '应为 flex 行且垂直居中：' + cs1.display + '/' + cs1.alignItems);
+  var txt1 = p1.querySelector(':scope > .eca-text');
+  assert(txt1, '头像后的内容应包进 .eca-text');
+  assert(p1.children.length === 2, 'p 应只有头像+文字块两个子元素，实际 ' + p1.children.length);
+  assert(txt1.textContent.indexOf('端起了枪') !== -1, '文字内容丢失');
+  var tr1 = txt1.getBoundingClientRect(), ar1 = img.getBoundingClientRect();
+  assert(Math.abs((tr1.top + tr1.height / 2) - (ar1.top + ar1.height / 2)) < 2,
+    '单行文字块中心应与头像中心对齐：偏差 ' + ((tr1.top + tr1.height / 2) - (ar1.top + ar1.height / 2)) + 'px');
+  assert(tr1.left >= ar1.right - 1, '文字块应在头像右侧');
+  // 垂直居中回归锁（三轮真实缺陷史）：
+  // v1 纯 CSS :has 简单段落 flex → <q> 使判定失效，居中从未生效
+  // v2 p:has 全量 flex → 文本与 <q> 拆成并排 flex 项，整段横排压缩
+  // v3 translateY（段落 block）→ 文字永远顶对齐，单行不居中
+  // 最终方案：JS 包裹 .eca-text + p.eca-p 两项 flex，文字块内部行内流不变
   var mes2 = __addFloor('<p>{弗兰克(微笑)}“嗯。”<em>他强调道</em>，随后离开。</p>', false);
   var mes3 = __addFloor('<p>{弗兰克(微笑)}<q>“看不见的敌人？”</q>他咧嘴一笑，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲。</p>', false);
   window.EmoAvatar.scanAll();
   [mes2.querySelector('p'), mes3.querySelector('p')].forEach(function (pp, i) {
-    var csx = getComputedStyle(pp);
-    assert(csx.display === 'block', '段落必须是 block 文本流（禁 flex）：' + csx.display);
+    assert(pp.classList.contains('eca-p'), '段落' + i + ' 应为 .eca-p');
+    var txtx = pp.querySelector(':scope > .eca-text');
+    assert(txtx, '段落' + i + ' 缺 .eca-text 包裹');
+    var qEl = txtx.querySelector('q');
+    var emEl = txtx.querySelector('em');
+    assert(qEl || emEl || i === 0, '段落' + i + ' 的 <q>/<em> 应在文字块内部');
     var imgx = pp.querySelector('img.eca-avatar');
-    var pr = pp.getBoundingClientRect(), ax = imgx.getBoundingClientRect();
-    assert(Math.abs((ax.top + ax.height / 2) - (pr.top + pr.height / 2)) < 2, '段落' + i + ' 头像未垂直居中');
-    assert(getComputedStyle(imgx).position === 'absolute', '头像应 absolute 定位');
+    var pr = pp.getBoundingClientRect(), ax = imgx.getBoundingClientRect(), tx = txtx.getBoundingClientRect();
+    assert(Math.abs((tx.top + tx.height / 2) - (ax.top + ax.height / 2)) < 2,
+      '段落' + i + ' 文字块未与头像垂直居中：偏差 ' + ((tx.top + tx.height / 2) - (ax.top + ax.height / 2)) + 'px');
   });
-  // 长段落必须折行（高度 > 2 行行高），且内容未被横向压扁
+  // 长段落：文字块内部正常折行（多行），占满右列，不被横向压扁
   var p4 = mes3.querySelector('p');
+  var txt4 = p4.querySelector(':scope > .eca-text');
+  var t4r = txt4.getBoundingClientRect();
   var p4r = p4.getBoundingClientRect();
-  var qEl = p4.querySelector('q');
-  var qRect = qEl.getBoundingClientRect();
-  var cs4 = getComputedStyle(p4);
-  var lh = parseFloat(cs4.lineHeight) || 20;
-  assert(p4r.height > lh * 2, '长段落应折行多行显示，实际高度仅 ' + p4r.height + 'px');
-  assert(qRect.width < p4r.width, 'q 内容被横向拉伸（flex 破版特征）');
-  assert(parseFloat(cs4.paddingLeft) > 40, '两列布局左内边距丢失');
+  var lh = parseFloat(getComputedStyle(txt4).lineHeight) || 20;
+  assert(t4r.height > lh * 1.5, '长段落文字块应折行多行显示，实际高度仅 ' + t4r.height + 'px');
+  assert(t4r.width > p4r.width * 0.7, '文字块应占满右列');
+  // 重扫幂等：.eca-p 已标记，重复 scanAll 不重复包裹
+  var before = p4.querySelector(':scope > .eca-text').childNodes.length;
+  window.EmoAvatar.scanAll();
+  window.EmoAvatar.scanAll();
+  assert(p4.querySelectorAll('.eca-text').length === 1, '重复扫描产生嵌套包裹');
   var cs2 = getComputedStyle(p2);
-  assert(cs2.position === 'static', '无头像段落不应改变定位：' + cs2.position);
-  assert(parseFloat(cs2.paddingLeft) === 0, '无头像段落不应有左内边距：' + cs2.paddingLeft);
+  assert(cs2.display !== 'flex' && !p2.classList.contains('eca-p'), '无头像段落不应被改造');
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */

@@ -85,22 +85,24 @@
         + 'user-select:none;overflow:hidden;}'
         + '.eca-avatar.eca-placeholder::after{content:"?";'
         + 'font-size:calc(var(--eca-size,2.5em)*.5);}'
-        // 两列布局：头像是段落首个元素子节点时，头像占左列、整段文字占右列，
-        // 消除行内大图的 L 形绕排与锯齿左缘；标签在段中的段落不受影响。
-        // 两条选择器分别覆盖 markdown <p> 包裹与 .mes_text 直接子节点两种结构。
-        // 左列为方形容（宽=高=size）+ .3em 间隙，文字紧贴头像；列内头像强制填满容器，
-        // 超宽/超窄图由 cover 裁剪，间隙恒定
-        + '.mes_text :has(> .eca-avatar:first-child),'
+        // 段首头像两列布局。p 段落由 wrapLeadingAvatarParagraphs 把头像后的全部
+        // 内容包进单个 .eca-text，形成「头像 + 文字块」两个 flex 项的标准聊天行：
+        // 文字块内部保持正常行内流（<q>/<em> 不会被拆成多个 flex 项），
+        // align-items:center 让单行与多行文字都相对头像垂直居中。
+        // 非 p 容器（.mes_text 直接子节点等，无 JS 包裹）保留
+        // absolute + translateY 居中的兜底布局
+        + '.mes_text p.eca-p{display:flex;align-items:center;gap:.3em;}'
+        + '.mes_text p.eca-p > .eca-avatar:first-child{flex:0 0 auto;'
+        + 'width:var(--eca-size,2.5em);max-width:none;margin:0;}'
+        + '.mes_text p.eca-p > .eca-text{flex:1 1 auto;min-width:0;}'
+        + '.mes_text :has(> .eca-avatar:first-child):not(p):not(.mes_text),'
         + '.mes_text:has(> .eca-avatar:first-child){position:relative;'
         + 'padding-left:calc(var(--eca-size,2.5em) + .3em);'
         + 'min-height:var(--eca-size,2.5em);}'
-        + '.mes_text :has(> .eca-avatar:first-child) > .eca-avatar:first-child,'
+        + '.mes_text :has(> .eca-avatar:first-child):not(p):not(.mes_text) > .eca-avatar:first-child,'
         + '.mes_text:has(> .eca-avatar:first-child) > .eca-avatar:first-child{'
         + 'position:absolute;left:0;top:50%;transform:translateY(-50%);margin:0;'
-        + 'width:var(--eca-size,2.5em);max-width:none;}'
-        // 垂直居中不用 flex：flex 会把段落里的连续文本与 <q>/<em> 等拆成多个
-        // 并排 flex 项（默认不换行），整段被横向压扁。改由头像自身
-        // top:50%+translateY(-50%) 相对整段垂直居中，段落保持正常 block 文本流;;
+        + 'width:var(--eca-size,2.5em);max-width:none;}';
 
     function injectStyles() {
         if (doc.getElementById('eca-styles')) return;
@@ -197,10 +199,36 @@
         for (let i = 0; i < nodes.length; i++) processTextNode(nodes[i]);
     }
 
+    /**
+     * 段首头像两列化：p 的首个子节点是头像时，把头像后的全部兄弟内容
+     * （文本、<q>、<em> 等）包进单个 .eca-text，使段落成为
+     * 「头像 + 文字块」两个 flex 项（配合 p.eca-p 样式），
+     * 单行/多行文字都垂直居中且内部行内流不变。
+     * 幂等：已处理（.eca-p）或头像后无内容则跳过
+     */
+    function wrapLeadingAvatarParagraphs() {
+        const list = doc.querySelectorAll('.mes_text p > .eca-avatar:first-child');
+        for (let i = 0; i < list.length; i++) {
+            const avatar = list[i];
+            const p = avatar.parentElement;
+            if (!p || p.classList.contains('eca-p')) continue;
+            p.classList.add('eca-p');
+            const nodes = [];
+            let n = avatar.nextSibling;
+            while (n) { nodes.push(n); n = n.nextSibling; }
+            if (!nodes.length) continue;
+            const span = doc.createElement('span');
+            span.className = 'eca-text';
+            for (let k = 0; k < nodes.length; k++) span.appendChild(nodes[k]);
+            p.appendChild(span);
+        }
+    }
+
     /** 幂等全扫：已替换的标签不在文本节点里，重扫无副作用 */
     function scanAll() {
         const list = doc.querySelectorAll('.mes_text');
         for (let i = 0; i < list.length; i++) processMesText(list[i]);
+        wrapLeadingAvatarParagraphs();
     }
 
     let scanTimer = null;
