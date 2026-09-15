@@ -1,0 +1,1867 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>情绪头像 · 羊皮纸美化与操作栏重构 Demo</title>
+<style>
+  :root {
+    --eca-size: 2.8em;
+    --font-serif: "Cinzel", "STSong", "Songti SC", "Noto Serif CJK SC", "Noto Serif SC", "SimSun", Georgia, serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    
+    /* 羊皮纸色彩体系 */
+    --parch-bg: #f5f0e3;
+    --parch-bg-gradient: linear-gradient(145deg, #fbf7ee 0%, #f4eddc 45%, #ecdfc7 100%);
+    --parch-sheet: #fbf9f4;
+    --parch-card: #f3ebd7;
+    --parch-card-hover: #f7f1e2;
+    --parch-card-active: #e8dbc0;
+    
+    --parch-border-outer: #cdbea2;
+    --parch-border-inner: #ded2bd;
+    --parch-border-dark: #b8a584;
+    --parch-border-gold: #c3984d;
+    
+    --parch-ink-title: #2b1f13;
+    --parch-ink-body: #493725;
+    --parch-ink-muted: #7d6b56;
+    --parch-ink-light: #9d8c78;
+    
+    --parch-brass: #9c7138;
+    --parch-brass-light: #b88648;
+    --parch-brass-glow: rgba(184, 134, 72, 0.28);
+    --parch-seal-red: #943325;
+    --parch-accent-green: #3f684c;
+    
+    --parch-shadow-modal: 0 20px 60px rgba(35, 22, 10, 0.45), 0 0 0 1px rgba(160, 130, 90, 0.25);
+    --parch-shadow-card: 0 2px 6px rgba(70, 50, 25, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    font-family: var(--font-sans);
+    background: #1e1d24;
+    color: #e2e2e2;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* 顶部控制栏 */
+  header.demo-header {
+    background: #14151a;
+    border-bottom: 1px solid #2d2f3b;
+    padding: 10px 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    z-index: 100;
+  }
+  .demo-title-group h1 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #f7ecd7;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-serif);
+  }
+  .demo-badge {
+    font-size: 11px;
+    background: linear-gradient(135deg, #c3984d, #9c7138);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: normal;
+    font-family: var(--font-sans);
+  }
+  .demo-subtitle {
+    font-size: 12px;
+    color: #9293a5;
+  }
+
+  .demo-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .ctrl-pill {
+    display: flex;
+    align-items: center;
+    background: #252632;
+    border: 1px solid #3c3e4f;
+    border-radius: 8px;
+    padding: 3px;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .ctrl-btn {
+    background: transparent;
+    border: none;
+    color: #aaa;
+    padding: 5px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .ctrl-btn:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.06);
+  }
+  .ctrl-btn.active {
+    background: #c3984d;
+    color: #2b1f13;
+    font-weight: 600;
+    box-shadow: 0 2px 6px rgba(195,152,77,0.35);
+  }
+  .action-btn {
+    background: #2b2e3b;
+    border: 1px solid #43475c;
+    color: #e2e2e2;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+  .action-btn:hover {
+    background: #393e52;
+    border-color: #c3984d;
+    color: #fff;
+  }
+  .action-btn.primary {
+    background: linear-gradient(135deg, #c3984d, #9c7138);
+    border-color: #e0b368;
+    color: #261b0f;
+    font-weight: 600;
+  }
+
+  /* 主视图环境区 */
+  .workspace-stage {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-size: cover;
+    background-position: center;
+    transition: background 0.3s ease;
+  }
+  /* 三种模拟背景环境 */
+  .bg-tavern {
+    background: radial-gradient(circle at center, #26211c 0%, #151210 100%);
+    background-image: 
+      radial-gradient(rgba(215, 175, 120, 0.08) 1px, transparent 1px),
+      radial-gradient(circle at center, #28221b 0%, #13100e 100%);
+    background-size: 24px 24px, 100% 100%;
+  }
+  .bg-parchment-sheet {
+    background: #dfd5c0;
+    background-image: radial-gradient(#d3c6ae 1px, transparent 1px), radial-gradient(#e5dcce 1px, transparent 1px);
+    background-size: 20px 20px;
+    background-position: 0 0, 10px 10px;
+  }
+  .bg-dark {
+    background: #111216;
+  }
+
+  /* 模拟酒馆背后的对话背景，让弹窗更真实 */
+  .stage-ambient-text {
+    position: absolute;
+    inset: 40px;
+    opacity: 0.15;
+    pointer-events: none;
+    font-family: var(--font-serif);
+    line-height: 2.2;
+    color: #e0d0b8;
+    max-width: 900px;
+    margin: 0 auto;
+    user-select: none;
+  }
+
+  /* =======================================================
+     核心：羊皮纸管理面板样式设计系统 (Parchment Settings UI)
+     ======================================================= */
+  
+  /* 模态框遮罩 */
+  .eca-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: rgba(18, 13, 8, 0.62);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    animation: ecaFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes ecaFadeIn {
+    from { opacity: 0; transform: scale(0.985); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* 羊皮纸模态框主窗体 */
+  .eca-modal {
+    width: min(840px, 94vw);
+    height: min(620px, 88vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--parch-bg);
+    background-image: var(--parch-bg-gradient);
+    color: var(--parch-ink-body);
+    border: 1px solid var(--parch-border-outer);
+    border-radius: 12px;
+    box-shadow: var(--parch-shadow-modal);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* 古典手造纸边缘与微光内阴影装饰 */
+  .eca-modal::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 9px;
+    pointer-events: none;
+    box-shadow: inset 0 0 18px rgba(150, 115, 75, 0.12);
+  }
+
+  /* 窗体顶栏 */
+  .eca-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--parch-border-inner);
+    background: rgba(246, 238, 222, 0.7);
+    position: relative;
+    z-index: 2;
+    flex: 0 0 auto;
+  }
+  .eca-header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-serif);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--parch-ink-title);
+    letter-spacing: 0.03em;
+  }
+  .eca-header-title .title-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: linear-gradient(135deg, #e4d3b6, #c8b088);
+    border: 1px solid var(--parch-brass);
+    border-radius: 50%;
+    color: #2b1f13;
+    font-size: 14px;
+    box-shadow: 0 1px 3px rgba(70,50,20,0.15);
+  }
+  .eca-header-tag {
+    font-size: 11px;
+    background: rgba(156, 113, 56, 0.15);
+    color: var(--parch-brass);
+    border: 1px solid rgba(156, 113, 56, 0.3);
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+  }
+
+  /* 关闭按键：古典火漆 / 铜扣触感 */
+  .eca-close {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--parch-ink-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+  }
+  .eca-close:hover {
+    color: var(--parch-seal-red);
+    background: rgba(148, 51, 37, 0.1);
+    border-color: rgba(148, 51, 37, 0.25);
+  }
+
+  /* 窗体中间主体：左右两栏 */
+  .eca-body {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+  }
+
+  /* =======================================================
+     左侧边栏 (eca-side) 与重构布局
+     ======================================================= */
+  .eca-side {
+    width: 220px;
+    flex: 0 0 220px;
+    border-right: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.55);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+  }
+
+  /* 边栏顶部区域（标题 + 快捷操作） */
+  .eca-side-header {
+    padding: 12px 14px 8px;
+    flex: 0 0 auto;
+    border-bottom: 1px solid rgba(205, 190, 162, 0.45);
+  }
+  .eca-side-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .eca-side-title {
+    font-family: var(--font-serif);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--parch-ink-title);
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .eca-side-count-badge {
+    background: #e3d3b7;
+    color: var(--parch-ink-body);
+    font-size: 11px;
+    padding: 0 5px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  /* 顶部快捷操作栏（在方案B与方案C中展示） */
+  .eca-top-actions {
+    display: none;
+    align-items: center;
+    gap: 6px;
+  }
+  .eca-btn-mini-quick {
+    background: #faf6ed;
+    border: 1px solid var(--parch-border-dark);
+    color: var(--parch-ink-body);
+    padding: 3px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    transition: all 0.12s ease;
+    box-shadow: 0 1px 2px rgba(60,40,20,0.06);
+  }
+  .eca-btn-mini-quick:hover {
+    background: #fff;
+    border-color: var(--parch-brass);
+    color: var(--parch-brass);
+  }
+
+  /* 角色滚动列表：独立滚动，永不遮蔽外部操作 */
+  .eca-char-list-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* 独立固定在侧边栏底部的常驻停靠栏 (Pinned Bottom Dock) */
+  .eca-side-dock {
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    border-top: 1px solid var(--parch-border-inner);
+    background: rgba(241, 230, 210, 0.85);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    box-shadow: 0 -2px 8px rgba(70, 50, 20, 0.05);
+  }
+
+  /* 羊皮纸质感按键基类 */
+  .eca-parch-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+    font-family: var(--font-sans);
+    user-select: none;
+    border: 1px solid var(--parch-border-dark);
+  }
+  /* 主要操作：黄铜暖光印记（新增角色） */
+  .eca-btn-brass {
+    background: linear-gradient(180deg, #fefaf0 0%, #ebe0c8 100%);
+    border-color: var(--parch-border-gold);
+    color: var(--parch-ink-title);
+    box-shadow: 0 1px 3px rgba(110, 75, 30, 0.15), inset 0 1px 0 #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .eca-btn-brass::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 1px;
+    background: rgba(255, 255, 255, 0.9);
+  }
+  .eca-btn-brass:hover {
+    background: linear-gradient(180deg, #fffdf8 0%, #f4e8d0 100%);
+    border-color: var(--parch-brass);
+    color: #1a1109;
+    box-shadow: 0 2px 6px rgba(156, 113, 56, 0.25), inset 0 1px 0 #fff;
+    transform: translateY(-1px);
+  }
+  .eca-btn-brass:active {
+    transform: translateY(0);
+    box-shadow: inset 0 1px 3px rgba(70, 50, 20, 0.2);
+  }
+
+  /* 次要操作：浅调纸面雕刻（新增分组） */
+  .eca-btn-secondary {
+    background: rgba(245, 237, 222, 0.6);
+    border-color: var(--parch-border-inner);
+    color: var(--parch-ink-muted);
+    box-shadow: 0 1px 2px rgba(60, 40, 20, 0.05);
+  }
+  .eca-btn-secondary:hover {
+    background: #faf6ec;
+    border-color: var(--parch-border-dark);
+    color: var(--parch-ink-body);
+    box-shadow: 0 1px 4px rgba(70, 50, 20, 0.1);
+  }
+
+  /* 底栏空缺处常驻按键（用户指定位置） */
+  .eca-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 18px;
+  }
+  .eca-footer-actions .eca-parch-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  /* 方案模式切换样式控制 */
+  body[data-layout="footer"] .eca-footer-actions { display: flex; }
+  body[data-layout="footer"] .eca-side-dock { display: none; }
+  body[data-layout="footer"] .eca-top-actions { display: none; }
+  body[data-layout="footer"] .eca-old-add-box { display: none; }
+
+  body[data-layout="dock"] .eca-footer-actions { display: none; }
+  body[data-layout="dock"] .eca-side-dock { display: flex; }
+  body[data-layout="dock"] .eca-top-actions { display: none; }
+  body[data-layout="dock"] .eca-old-add-box { display: none; }
+
+  body[data-layout="top"] .eca-footer-actions { display: none; }
+  body[data-layout="top"] .eca-side-dock { display: none; }
+  body[data-layout="top"] .eca-top-actions { display: flex; }
+  body[data-layout="top"] .eca-old-add-box { display: none; }
+
+  /* 旧版随动滚动重现（用于对比痛点） */
+  body[data-layout="old"] .eca-footer-actions { display: none; }
+  body[data-layout="old"] .eca-side-dock { display: none; }
+  body[data-layout="old"] .eca-top-actions { display: none; }
+  body[data-layout="old"] .eca-char-list-wrap { overflow-y: visible; }
+  body[data-layout="old"] .eca-side { overflow-y: auto; }
+  body[data-layout="old"] .eca-old-add-box { display: flex; }
+
+  .eca-old-add-box {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: auto;
+    padding-top: 10px;
+  }
+  .eca-old-add-btn {
+    padding: 6px;
+    border-radius: 6px;
+    border: 1px dashed #b8a584;
+    background: rgba(240,230,210,0.5);
+    color: var(--parch-brass);
+    cursor: pointer;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  /* =======================================================
+     人物组手风琴 (Groups & Accordions)
+     ======================================================= */
+  .eca-group {
+    flex-shrink: 0;
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 7px;
+    background: rgba(251, 247, 238, 0.7);
+    box-shadow: 0 1px 3px rgba(60, 40, 20, 0.04);
+    overflow: hidden;
+    transition: border-color 0.15s ease;
+  }
+  .eca-group:hover {
+    border-color: var(--parch-border-dark);
+  }
+  .eca-group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    user-select: none;
+    background: rgba(244, 234, 217, 0.5);
+    transition: background 0.12s ease;
+  }
+  .eca-group-head:hover {
+    background: rgba(238, 224, 203, 0.85);
+  }
+  .eca-group-arrow {
+    width: 14px;
+    color: var(--parch-brass);
+    transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    flex: 0 0 auto;
+    text-align: center;
+    font-size: 10px;
+  }
+  .eca-group.collapsed .eca-group-arrow {
+    transform: rotate(-90deg);
+  }
+  .eca-group-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--parch-ink-title);
+  }
+  .eca-group-count {
+    color: var(--parch-ink-light);
+    font-size: 10px;
+    flex: 0 0 auto;
+    background: rgba(180, 150, 110, 0.15);
+    padding: 1px 5px;
+    border-radius: 10px;
+  }
+  
+  /* 组开关 Checkbox */
+  .eca-group-toggle {
+    flex: 0 0 auto;
+    cursor: pointer;
+    accent-color: var(--parch-brass);
+    margin: 0;
+  }
+  .eca-group-off .eca-group-name,
+  .eca-group-off .eca-group-count {
+    color: var(--parch-ink-light);
+    text-decoration: line-through;
+    opacity: 0.75;
+  }
+
+  /* 组头操作按键 */
+  .eca-group-btn {
+    background: none;
+    border: 0;
+    color: var(--parch-ink-light);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    flex: 0 0 auto;
+    transition: all 0.12s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .eca-group-btn:hover {
+    color: var(--parch-ink-title);
+    background: rgba(180, 150, 110, 0.2);
+  }
+  .eca-group-btn.eca-char-del:hover,
+  .eca-group-btn[data-act="grp-del"]:hover {
+    color: var(--parch-seal-red);
+    background: rgba(148, 51, 37, 0.15);
+  }
+  .eca-group-add-btn {
+    display: none;
+    color: var(--parch-brass);
+    font-weight: bold;
+    font-size: 12px;
+  }
+  .eca-group-add-btn:hover {
+    color: #1a1109;
+    background: #e6d3b4;
+  }
+
+  /* 组内角色列表 */
+  .eca-group-body {
+    padding: 4px 6px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 16px;
+    border-top: 1px solid rgba(222, 210, 189, 0.6);
+  }
+  .eca-group.collapsed .eca-group-body {
+    display: none;
+  }
+  .eca-group-body.eca-drop-hover {
+    background: rgba(195, 152, 77, 0.15);
+    outline: 1px dashed var(--parch-brass);
+    outline-offset: -2px;
+    border-radius: 4px;
+  }
+
+  /* 单个角色项 */
+  .eca-char-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid transparent;
+    transition: all 0.12s ease;
+    user-select: none;
+  }
+  .eca-char-item:hover {
+    background: #fff;
+    border-color: var(--parch-border-inner);
+    box-shadow: 0 1px 3px rgba(60, 40, 20, 0.05);
+  }
+  .eca-char-item.active {
+    background: linear-gradient(90deg, #f2e4cb 0%, #fbf6ec 100%);
+    border-color: var(--parch-border-gold);
+    box-shadow: 0 1px 4px rgba(156, 113, 56, 0.15);
+    position: relative;
+  }
+  .eca-char-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 3px; bottom: 3px; width: 3px;
+    background: var(--parch-brass);
+    border-radius: 2px;
+  }
+  .eca-char-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--parch-ink-body);
+  }
+  .eca-char-item.active .eca-char-name {
+    font-weight: 600;
+    color: var(--parch-ink-title);
+  }
+  .eca-char-del {
+    background: none;
+    border: 0;
+    color: var(--parch-ink-light);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 1px 3px;
+    border-radius: 3px;
+    opacity: 0.6;
+    transition: all 0.12s ease;
+  }
+  .eca-char-item:hover .eca-char-del {
+    opacity: 1;
+  }
+  .eca-char-del:hover {
+    color: var(--parch-seal-red);
+    background: rgba(148, 51, 37, 0.12);
+  }
+  .eca-char-item[draggable] {
+    cursor: grab;
+  }
+  .eca-char-item.eca-dragging {
+    opacity: 0.35;
+  }
+
+  /* =======================================================
+     右侧详情区域 (eca-detail)
+     ======================================================= */
+  .eca-detail {
+    flex: 1 1 auto;
+    padding: 16px 22px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .eca-detail-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--parch-border-inner);
+    flex: 0 0 auto;
+  }
+  .eca-detail-title-wrap {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex: 1;
+  }
+  .eca-detail-char-name {
+    font-family: var(--font-serif);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--parch-ink-title);
+    letter-spacing: 0.02em;
+  }
+  .eca-detail-char-badge {
+    font-size: 11px;
+    color: var(--parch-ink-muted);
+    background: rgba(160, 130, 90, 0.12);
+    border: 1px solid rgba(160, 130, 90, 0.25);
+    padding: 1px 7px;
+    border-radius: 4px;
+  }
+
+  .eca-mini-btn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--parch-border-dark);
+    background: #fcf8f0;
+    color: var(--parch-ink-body);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(60, 40, 20, 0.05);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .eca-mini-btn:hover {
+    background: #fff;
+    border-color: var(--parch-brass);
+    color: var(--parch-brass);
+    box-shadow: 0 2px 5px rgba(156, 113, 56, 0.18);
+  }
+  .eca-mini-btn.primary {
+    background: linear-gradient(180deg, #fbf5e6, #ecdcb9);
+    border-color: var(--parch-border-gold);
+    color: var(--parch-ink-title);
+    font-weight: 600;
+  }
+
+  .eca-detail-tip {
+    color: var(--parch-ink-muted);
+    font-size: 12px;
+    margin-bottom: 12px;
+    line-height: 1.5;
+    background: rgba(246, 237, 220, 0.6);
+    border-left: 3px solid var(--parch-brass);
+    padding: 6px 12px;
+    border-radius: 0 5px 5px 0;
+    flex: 0 0 auto;
+  }
+
+  /* 十种情绪相框网格 (Cameo Grid) */
+  .eca-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    align-content: start;
+    margin-top: 2px;
+  }
+  .eca-cell {
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 7px;
+    padding: 5px 5px 6px;
+    text-align: center;
+    cursor: pointer;
+    background: #fbf8f2;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 1px 3px rgba(60, 40, 20, 0.05);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    box-sizing: border-box;
+  }
+  .eca-cell:hover {
+    border-color: var(--parch-brass);
+    background: #fff;
+    box-shadow: 0 4px 12px rgba(156, 113, 56, 0.22);
+    transform: translateY(-2px);
+  }
+  .eca-cell-img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 4px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: rgba(235, 224, 205, 0.3);
+  }
+  .eca-cell-img img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 5px;
+    border: 1px solid rgba(160, 130, 90, 0.25);
+    box-shadow: 0 1px 3px rgba(60, 40, 20, 0.1);
+    display: block;
+  }
+  /* 空格：仿古印章描线 */
+  .eca-cell-empty {
+    width: 100%;
+    height: 100%;
+    border: 1px dashed var(--parch-border-dark);
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--parch-ink-light);
+    font-size: 12px;
+    font-family: var(--font-serif);
+    background: rgba(240, 230, 210, 0.25);
+    transition: all 0.15s ease;
+  }
+  .eca-cell:hover .eca-cell-empty {
+    border-color: var(--parch-brass);
+    color: var(--parch-brass);
+    background: rgba(195, 152, 77, 0.1);
+  }
+  .eca-cell-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--parch-ink-body);
+    font-family: var(--font-serif);
+    line-height: 1.2;
+    padding-top: 2px;
+  }
+
+  /* =======================================================
+     窗体底栏 (eca-footer)
+     ======================================================= */
+  .eca-footer {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 20px;
+    border-top: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.8);
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    font-size: 13px;
+  }
+  
+  /* 机械拨动开关 */
+  .eca-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 500;
+    color: var(--parch-ink-title);
+  }
+  .toggle-track {
+    width: 38px;
+    height: 20px;
+    background: #d9ccb4;
+    border-radius: 12px;
+    position: relative;
+    transition: background 0.2s ease;
+    border: 1px solid var(--parch-border-dark);
+    box-shadow: inset 0 1px 3px rgba(60, 40, 20, 0.2);
+  }
+  .toggle-knob {
+    width: 16px;
+    height: 16px;
+    background: linear-gradient(135deg, #fff, #f4e8d0);
+    border-radius: 50%;
+    position: absolute;
+    top: 1px; left: 1px;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 1px 3px rgba(60, 40, 20, 0.3);
+  }
+  .eca-switch input { display: none; }
+  .eca-switch input:checked + .toggle-track {
+    background: var(--parch-accent-green);
+    border-color: #31523b;
+  }
+  .eca-switch input:checked + .toggle-track .toggle-knob {
+    transform: translateX(18px);
+  }
+
+  /* 头像大小调节滑块 */
+  .eca-size {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--parch-ink-body);
+  }
+  .eca-size input[type=range] {
+    width: 130px;
+    accent-color: var(--parch-brass);
+    cursor: pointer;
+  }
+  .eca-size-val {
+    min-width: 3.5em;
+    color: var(--parch-brass);
+    font-weight: 600;
+    font-family: Consolas, monospace;
+  }
+
+  /* 即时预览 */
+  .eca-size-preview {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--parch-ink-muted);
+    font-size: 12px;
+  }
+  .eca-preview-box {
+    height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .eca-avatar {
+    display: inline-block;
+    height: var(--eca-size, 2.8em);
+    width: auto;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(60,40,20,0.25), 0 0 0 1px rgba(160,120,70,0.3);
+    object-fit: cover;
+  }
+
+  /* 自定义羊皮纸滚动条 */
+  ::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(220, 205, 180, 0.35);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cfbea0;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #b5a281;
+  }
+
+  /* =======================================================
+     批量导入弹窗 (Batch Import Modal - Parchment Style)
+     ======================================================= */
+  .batch-modal-wrap {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100001;
+    background: rgba(18, 13, 8, 0.7);
+    backdrop-filter: blur(5px);
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .batch-modal {
+    width: min(880px, 94vw);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--parch-bg);
+    background-image: var(--parch-bg-gradient);
+    border: 1px solid var(--parch-border-outer);
+    border-radius: 12px;
+    box-shadow: var(--parch-shadow-modal);
+    position: relative;
+    overflow: hidden;
+  }
+  .batch-modal::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 9px;
+    pointer-events: none;
+  }
+  .batch-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+  .batch-drop-zone {
+    background: rgba(255, 255, 255, 0.5);
+    border: 2px dashed var(--parch-border-dark);
+    border-radius: 8px;
+    padding: 18px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .batch-drop-zone:hover {
+    background: #fff;
+    border-color: var(--parch-brass);
+  }
+  .batch-ctrl-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 14px 0;
+    background: rgba(244, 235, 218, 0.7);
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--parch-border-inner);
+  }
+
+  /* Toast 提示条 */
+  .eca-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 30px;
+    transform: translateX(-50%);
+    background: linear-gradient(145deg, #fcf8ee, #ebdcc0);
+    color: var(--parch-ink-title);
+    border: 1px solid var(--parch-border-gold);
+    padding: 9px 22px;
+    border-radius: 8px;
+    z-index: 100005;
+    box-shadow: 0 6px 20px rgba(50, 30, 10, 0.25);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    pointer-events: none;
+  }
+  .eca-toast::before {
+    content: "✦";
+    color: var(--parch-brass);
+    font-size: 14px;
+  }
+  .eca-toast-warn {
+    border-color: var(--parch-seal-red);
+    color: var(--parch-seal-red);
+  }
+  .eca-toast-warn::before {
+    content: "⚠";
+    color: var(--parch-seal-red);
+  }
+  .eca-toast-out {
+    opacity: 0;
+    transform: translate(-50%, 15px);
+  }
+</style>
+</head>
+<body data-layout="footer">
+
+  <!-- 顶部演示控制栏 -->
+  <header class="demo-header">
+    <div class="demo-title-group">
+      <h1>
+        情绪头像 · 羊皮纸界面重构展厅
+        <span class="demo-badge">Parchment Redesign</span>
+      </h1>
+      <p class="demo-subtitle">体验优雅复古手造纸质感与「新增角色/组」全新常驻布局</p>
+    </div>
+
+    <div class="demo-controls">
+      <!-- 布局方案选择器 -->
+      <div class="ctrl-pill" title="切换「新增角色/组」按键的安放位置">
+        <span style="color:#8c8d9e; padding-left:4px;">按键位置：</span>
+        <button class="ctrl-btn active" data-layout-set="footer">底栏空缺处 (您指定位置 · 最佳)</button>
+        <button class="ctrl-btn" data-layout-set="dock">侧栏底部停靠</button>
+        <button class="ctrl-btn" data-layout-set="top">侧栏顶部快捷</button>
+        <button class="ctrl-btn" data-layout-set="old" style="color:#d97768;">旧版随动 (易被滚没)</button>
+      </div>
+
+      <!-- 背景环境切换 -->
+      <div class="ctrl-pill">
+        <span style="color:#8c8d9e; padding-left:4px;">背景：</span>
+        <button class="ctrl-btn active" data-bg-set="bg-tavern">酒馆实境</button>
+        <button class="ctrl-btn" data-bg-set="bg-parchment-sheet">羊皮纸书页</button>
+        <button class="ctrl-btn" data-bg-set="bg-dark">现代暗色</button>
+      </div>
+
+      <!-- 功能操作按键 -->
+      <button class="action-btn" id="btn-fill-chars" title="快速填充多个组和角色，测试滚动条出现时按键是否依然可见">
+        <span>📜 填充15+角色(测滚动)</span>
+      </button>
+
+      <button class="action-btn" id="btn-open-batch" title="查看配套的羊皮纸风格批量切图弹窗">
+        <span>✂ 批量导入弹窗</span>
+      </button>
+
+      <button class="action-btn primary" id="btn-toggle-modal">
+        <span>⟲ 重置/打开面板</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 工作区背景舞台 -->
+  <div class="workspace-stage bg-tavern" id="stage">
+    <!-- 模拟背后的酒馆小说段落 -->
+    <div class="stage-ambient-text">
+      <p>『夜幕降临在橡木酒馆的尖顶瓦檐上，老侍者将一盏青铜油灯挂在雕花立柱上，昏黄的灯火摇曳着映照在略带褶皱的泛黄羊皮纸书页上。』</p>
+      <p>【埃利奥特(微笑)】“看来我们又找到了新的线索，玛德琳。”年轻人放下手中的镀银短铳，嘴角扬起自信的弧度，“这比我们预想的更有意思。”</p>
+      <p>【玛德琳(思考)】“别大意，埃利奥特。”她轻蹙眉头，白皙的手指在地图上的密林标记处轻轻滑过，“那些躲在阴影里的家伙绝不会坐视不理。”</p>
+      <p>【弗朗索瓦丝(杀意)】“那就让他们来试试好了。”冷峻的刀客只是冷淡地抛下这一句话，手中的短刃泛着淬炼寒光。</p>
+    </div>
+
+    <!-- ========================================================= -->
+    <!-- 羊皮纸管理面板主体 (#eca-panel) -->
+    <!-- ========================================================= -->
+    <div class="eca-overlay" id="eca-panel">
+      <div class="eca-modal">
+        <!-- 弹窗顶栏 -->
+        <div class="eca-header">
+          <div class="eca-header-title">
+            <span class="title-icon">☺</span>
+            <span>情绪头像管理</span>
+            <span class="eca-header-tag">羊皮纸典雅版</span>
+          </div>
+          <button class="eca-close" id="eca-close-btn" title="关闭面板">×</button>
+        </div>
+
+        <!-- 弹窗主体（左右分栏） -->
+        <div class="eca-body">
+          
+          <!-- 左侧边栏：角色与分组管理 -->
+          <div class="eca-side">
+            <!-- 边栏顶部行 -->
+            <div class="eca-side-header">
+              <div class="eca-side-title-row">
+                <span class="eca-side-title">
+                  <span>角色与分组</span>
+                  <span class="eca-side-count-badge" id="char-total-badge">8</span>
+                </span>
+
+                <!-- 方案B / 方案C：顶部轻量快捷按键 -->
+                <div class="eca-top-actions">
+                  <button class="eca-btn-mini-quick" id="quick-add-char" title="新增角色">＋角色</button>
+                  <button class="eca-btn-mini-quick" id="quick-add-group" title="新增分组">＋组</button>
+                </div>
+              </div>
+              <div style="font-size:10px; color:var(--parch-ink-muted);">可拖拽角色进入不同分组</div>
+            </div>
+
+            <!-- 独立滚动列表区 -->
+            <div class="eca-char-list-wrap" id="eca-char-list">
+              <!-- JS 动态渲染手风琴分组与角色 -->
+            </div>
+
+            <!-- 旧版对比：置于滚动列表最下方的按钮（旧版缺陷：列表一长就被滚没） -->
+            <div class="eca-old-add-box">
+              <div style="font-size:10px; color:#c05040; text-align:center;">↓ 旧版放置在此，会被列表滚出视界 ↓</div>
+              <button class="eca-old-add-btn" id="old-add-group">＋ 新增分组 (旧)</button>
+              <button class="eca-old-add-btn" id="old-add-char">＋ 新增角色 (旧)</button>
+            </div>
+
+            <!-- 方案A / 方案C：独立常驻停靠栏 (Pinned Bottom Dock) -->
+            <div class="eca-side-dock">
+              <button class="eca-parch-btn eca-btn-brass" id="dock-add-char" title="立即登记一个新角色">
+                <span style="font-size:14px; font-weight:bold;">＋</span>
+                <span>新增角色</span>
+              </button>
+              <button class="eca-parch-btn eca-btn-secondary" id="dock-add-group" title="新建角色分组（如：主要角色、配角、异能者）">
+                <span style="font-size:12px;">＋</span>
+                <span>新增分组</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 右侧详情区：角色十情绪头像配置 -->
+          <div class="eca-detail" id="eca-detail">
+            <!-- 头部：角色名与操作按键 -->
+            <div class="eca-detail-head">
+              <div class="eca-detail-title-wrap">
+                <span class="eca-detail-char-name" id="cur-char-name">埃利奥特</span>
+                <span class="eca-detail-char-badge" id="cur-char-group">主角团</span>
+              </div>
+              <button class="eca-mini-btn primary" id="eca-batch-btn">
+                <span>✂</span> 批量导入大图
+              </button>
+              <button class="eca-mini-btn" id="eca-rename-btn">
+                <span>✎</span> 改名
+              </button>
+            </div>
+
+            <!-- 提示条 -->
+            <div class="eca-detail-tip">
+              ※ 点击格子上传/更换单张头像；十种情绪缺图时自动回落「默认」；支持拖拽多张图片自动情绪归类。
+            </div>
+
+            <!-- 十种情绪展示网格 -->
+            <div class="eca-grid" id="eca-grid">
+              <!-- JS 动态渲染 10 情绪格子 -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 弹窗底栏 -->
+        <div class="eca-footer">
+          <!-- 提示词注入开关 -->
+          <label class="eca-switch">
+            <input type="checkbox" id="eca-enabled" checked>
+            <div class="toggle-track"><div class="toggle-knob"></div></div>
+            <span>启用提示词注入</span>
+          </label>
+
+          <!-- 头像大小调节滑块 -->
+          <div class="eca-size">
+            <span>头像大小</span>
+            <input type="range" id="eca-size-range" min="1.5" max="5.0" step="0.1" value="2.8">
+            <span class="eca-size-val" id="eca-size-val">2.8em</span>
+          </div>
+
+          <!-- 用户指定：底栏空缺处常驻操作按钮 -->
+          <div class="eca-footer-actions" id="eca-footer-actions">
+            <button class="eca-parch-btn eca-btn-brass" id="footer-add-char" title="立即登记一个新角色">
+              <span style="font-size:13px; font-weight:bold;">＋</span>
+              <span>新增角色</span>
+            </button>
+            <button class="eca-parch-btn eca-btn-secondary" id="footer-add-group" title="新建角色分组">
+              <span style="font-size:12px;">＋</span>
+              <span>新增分组</span>
+            </button>
+          </div>
+
+          <!-- 实时尺寸预览 -->
+          <div class="eca-size-preview">
+            <span>实时视口预览</span>
+            <div class="eca-preview-box" id="eca-size-preview">
+              <!-- JS 动态渲染头像预览 -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========================================================= -->
+    <!-- 羊皮纸批量导入弹窗 (#eca-batch-panel) -->
+    <!-- ========================================================= -->
+    <div class="batch-modal-wrap" id="eca-batch-panel">
+      <div class="batch-modal">
+        <div class="eca-header">
+          <div class="eca-header-title">
+            <span class="title-icon">✂</span>
+            <span id="batch-title">批量导入「埃利奥特」合集大图</span>
+          </div>
+          <button class="eca-close" id="batch-close-btn">×</button>
+        </div>
+
+        <div class="batch-body">
+          <div class="batch-drop-zone" id="batch-drop-box">
+            <div style="font-size:32px; margin-bottom:8px;">🖼</div>
+            <div style="font-size:14px; font-weight:600; color:var(--parch-ink-title); margin-bottom:4px;">
+              点击或将九宫格 / 表情合集大图拖曳至此
+            </div>
+            <div style="font-size:12px; color:var(--parch-ink-muted);">
+              支持 2×5、3×3 等均匀网格切分，算法将自动侦测网格行列并居中裁剪
+            </div>
+          </div>
+
+          <div class="batch-ctrl-bar">
+            <span style="font-size:12px; font-weight:600; color:var(--parch-ink-title);">网格参数：</span>
+            <button class="eca-mini-btn">行数：2</button>
+            <button class="eca-mini-btn">列数：5</button>
+            <button class="eca-mini-btn primary">自动侦测</button>
+            <span style="margin-left:auto; font-size:12px; color:var(--parch-ink-muted);">
+              裁剪比例：1:1 正方形
+            </span>
+          </div>
+
+          <div style="text-align:center; padding:20px; color:var(--parch-ink-muted); font-size:12px; border:1px dashed var(--parch-border-inner); border-radius:6px;">
+            ✦ 此处为批量导入演示窗口，已完美适配羊皮纸典雅材质 ✦
+          </div>
+        </div>
+
+        <div class="eca-footer" style="justify-content:flex-end;">
+          <button class="eca-mini-btn" id="batch-cancel-btn">取消</button>
+          <button class="eca-parch-btn eca-btn-brass" id="batch-confirm-btn">确认切分入库</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 隐藏的文件选择器 -->
+  <input type="file" id="file-uploader" accept="image/*" style="display:none;">
+
+<script>
+(function() {
+  // 十种情绪定义
+  const EMOTIONS = ['默认', '微笑', '大笑', '害羞', '思考', '悲伤', '惊讶', '愤怒', '杀意', '轻蔑'];
+
+  // 初始分组与角色真实素材数据库
+  let groups = [
+    {
+      id: 'g-main',
+      name: '主角团 (主要角色)',
+      enabled: true,
+      members: ['埃利奥特', '玛德琳', '弗朗索瓦丝']
+    },
+    {
+      id: 'g-invest',
+      name: '调查团 / 异能者',
+      enabled: true,
+      members: ['索恩', '林有声', '爱德华']
+    },
+    {
+      id: 'g-npc',
+      name: '酒馆配角',
+      enabled: true,
+      members: ['老酒保', '游吟诗人']
+    }
+  ];
+
+  // 角色头像资产（使用工程拆图输出的真实图片）
+  const avatarDb = {
+    '埃利奥特': {
+      '默认': '拆图输出/埃利奥特/埃利奥特-默认.png',
+      '微笑': '拆图输出/埃利奥特/埃利奥特-微笑.png',
+      '大笑': '拆图输出/埃利奥特/埃利奥特-大笑.png',
+      '害羞': '拆图输出/埃利奥特/埃利奥特-害羞.png',
+      '思考': '拆图输出/埃利奥特/埃利奥特-思考.png',
+      '悲伤': '拆图输出/埃利奥特/埃利奥特-悲伤.png',
+      '惊讶': '拆图输出/埃利奥特/埃利奥特-惊讶.png',
+      '愤怒': '拆图输出/埃利奥特/埃利奥特-愤怒.png',
+      '杀意': '拆图输出/埃利奥特/埃利奥特-杀意.png',
+      '轻蔑': '拆图输出/埃利奥特/埃利奥特-轻蔑.png'
+    },
+    '玛德琳': {
+      '默认': '拆图输出-玛德琳v2/玛德琳-默认.png',
+      '微笑': '拆图输出-玛德琳v2/玛德琳-微笑.png',
+      '大笑': '拆图输出-玛德琳v2/玛德琳-大笑.png',
+      '害羞': '拆图输出-玛德琳v2/玛德琳-害羞.png',
+      '思考': '拆图输出-玛德琳v2/玛德琳-思考.png',
+      '悲伤': '拆图输出-玛德琳v2/玛德琳-悲伤.png',
+      '惊讶': '拆图输出-玛德琳v2/玛德琳-惊讶.png',
+      '愤怒': '拆图输出-玛德琳v2/玛德琳-愤怒.png',
+      '杀意': '拆图输出-玛德琳v2/玛德琳-杀意.png',
+      '轻蔑': '拆图输出-玛德琳v2/玛德琳-轻蔑.png'
+    },
+    '弗朗索瓦丝': {
+      '默认': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-默认.png',
+      '微笑': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-微笑.png',
+      '大笑': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-大笑.png',
+      '害羞': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-害羞.png',
+      '思考': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-思考.png',
+      '悲伤': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-悲伤.png',
+      '惊讶': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-惊讶.png',
+      '愤怒': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-愤怒.png',
+      '杀意': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-杀意.png',
+      '轻蔑': '拆图输出-弗朗索瓦丝/弗朗索瓦丝-轻蔑.png'
+    },
+    '索恩': {
+      '默认': '拆图输出-索恩/索恩-默认.png',
+      '微笑': '拆图输出-索恩/索恩-微笑.png',
+      '思考': '拆图输出-索恩/索恩-思考.png',
+      '愤怒': '拆图输出-索恩/索恩-愤怒.png'
+    }
+  };
+
+  let selectedCharacter = '埃利奥特';
+  let collapsedGroups = {};
+  let currentSize = 2.8;
+
+  // DOM 节点引用
+  const charListEl = document.getElementById('eca-char-list');
+  const detailEl = document.getElementById('eca-detail');
+  const curCharNameEl = document.getElementById('cur-char-name');
+  const curCharGroupEl = document.getElementById('cur-char-group');
+  const gridEl = document.getElementById('eca-grid');
+  const sizeRangeEl = document.getElementById('eca-size-range');
+  const sizeValEl = document.getElementById('eca-size-val');
+  const previewBoxEl = document.getElementById('eca-size-preview');
+  const totalBadgeEl = document.getElementById('char-total-badge');
+  const fileUploader = document.getElementById('file-uploader');
+
+  let activeUploadEmotion = null;
+
+  // 渲染侧边栏列表
+  function renderCharList() {
+    let totalChars = 0;
+    charListEl.innerHTML = groups.map(g => {
+      totalChars += g.members.length;
+      const isCollapsed = !!collapsedGroups[g.id];
+      const offClass = g.enabled ? '' : ' eca-group-off';
+
+      const memberItems = g.members.map(name => {
+        const isActive = name === selectedCharacter;
+        return `
+          <div class="eca-char-item ${isActive ? 'active' : ''}" draggable="true" data-name="${name}">
+            <span class="eca-char-name">${name}</span>
+            <button class="eca-char-del" data-name="${name}" title="删除角色">✕</button>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="eca-group ${isCollapsed ? 'collapsed' : ''}${offClass}" data-gid="${g.id}">
+          <div class="eca-group-head">
+            <span class="eca-group-arrow">▼</span>
+            <input type="checkbox" class="eca-group-toggle" data-gid="${g.id}" ${g.enabled ? 'checked' : ''} title="组开关">
+            <span class="eca-group-name" title="双击重命名">${g.name}</span>
+            <span class="eca-group-count">${g.members.length}</span>
+            <!-- 方案C：组头专属直接新增角色按键 -->
+            <button class="eca-group-btn eca-group-add-btn" data-act="grp-add-char" data-gid="${g.id}" title="直接在此组新增角色">＋</button>
+            <button class="eca-group-btn" data-act="grp-rename" data-gid="${g.id}" title="重命名组">✎</button>
+            <button class="eca-group-btn" data-act="grp-del" data-gid="${g.id}" title="删除组">✕</button>
+          </div>
+          <div class="eca-group-body">
+            ${g.members.length > 0 ? memberItems : '<div style="font-size:11px;color:var(--parch-ink-light);padding:6px;text-align:center;">拖拽角色到此 (空组)</div>'}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    totalBadgeEl.textContent = totalChars;
+  }
+
+  // 渲染右侧十情绪网格
+  function renderDetailGrid() {
+    if (!selectedCharacter) {
+      curCharNameEl.textContent = '未选择角色';
+      curCharGroupEl.textContent = '-';
+      gridEl.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--parch-ink-muted);">请在左侧选择或新增一个角色</div>';
+      return;
+    }
+
+    curCharNameEl.textContent = selectedCharacter;
+    const parentGroup = groups.find(g => g.members.includes(selectedCharacter));
+    curCharGroupEl.textContent = parentGroup ? parentGroup.name : '未分组';
+
+    const charAvatars = avatarDb[selectedCharacter] || {};
+
+    gridEl.innerHTML = EMOTIONS.map(emo => {
+      const src = charAvatars[emo];
+      const imgContent = src
+        ? `<img src="${src}" alt="${emo}">`
+        : `<div class="eca-cell-empty"><span>${emo}</span></div>`;
+
+      return `
+        <div class="eca-cell" data-emotion="${emo}" title="点击上传/更换「${emo}」头像">
+          <div class="eca-cell-img">${imgContent}</div>
+          <div class="eca-cell-name">${emo}</div>
+        </div>
+      `;
+    }).join('');
+
+    updateSizePreview();
+  }
+
+  // 更新尺寸与实时预览
+  function updateSizePreview() {
+    document.documentElement.style.setProperty('--eca-size', currentSize + 'em');
+    sizeValEl.textContent = currentSize.toFixed(1) + 'em';
+    sizeRangeEl.value = currentSize;
+
+    const charAvatars = avatarDb[selectedCharacter] || {};
+    const sampleSrc = charAvatars['默认'] || charAvatars['微笑'] || Object.values(charAvatars)[0];
+
+    if (sampleSrc) {
+      previewBoxEl.innerHTML = `<img class="eca-avatar" src="${sampleSrc}" alt="预览">`;
+    } else {
+      previewBoxEl.innerHTML = `<span style="font-size:11px; color:var(--parch-ink-light);">暂无可用头像</span>`;
+    }
+  }
+
+  // Toast 提示条
+  function showToast(msg, isWarn = false) {
+    const old = document.querySelector('.eca-toast');
+    if (old) old.remove();
+
+    const el = document.createElement('div');
+    el.className = 'eca-toast' + (isWarn ? ' eca-toast-warn' : '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+
+    setTimeout(() => el.classList.add('eca-toast-out'), 1800);
+    setTimeout(() => el.remove(), 2200);
+  }
+
+  // 新增角色弹窗流程
+  function addCharacterPrompt(targetGroupId = null) {
+    const name = prompt('新增角色名（须与 AI 输出角色名完全一致）：', '');
+    if (!name || !name.trim()) return;
+    const trimmed = name.trim();
+
+    // 检查重复
+    const allMembers = groups.flatMap(g => g.members);
+    if (allMembers.includes(trimmed)) {
+      showToast('该角色名已存在！', true);
+      return;
+    }
+
+    let target = targetGroupId ? groups.find(g => g.id === targetGroupId) : groups[0];
+    if (!target) target = groups[0];
+
+    target.members.push(trimmed);
+    selectedCharacter = trimmed;
+    renderCharList();
+    renderDetailGrid();
+    showToast(`已成功登记角色「${trimmed}」并归入「${target.name}」`);
+  }
+
+  // 新增分组弹窗流程
+  function addGroupPrompt() {
+    const name = prompt('新增分组名称（如：反派阵营、客串NPC）：', '');
+    if (!name || !name.trim()) return;
+    const trimmed = name.trim();
+
+    if (groups.some(g => g.name === trimmed)) {
+      showToast('该分组名称已存在！', true);
+      return;
+    }
+
+    const newGroup = {
+      id: 'g-' + Date.now(),
+      name: trimmed,
+      enabled: true,
+      members: []
+    };
+    groups.push(newGroup);
+    renderCharList();
+    showToast(`已新建分组「${trimmed}」，可直接拖拽角色移入`);
+  }
+
+  // 事件绑定
+  function bindEvents() {
+    // 布局模式切换器
+    document.querySelectorAll('[data-layout-set]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-layout-set]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const layout = btn.dataset.layoutSet;
+        document.body.dataset.layout = layout;
+        renderCharList();
+        
+        const names = {
+          'footer': '底栏空缺处常驻（您指定位置 · 空间利用极佳，永不遮蔽）',
+          'dock': '侧栏底部停靠',
+          'top': '侧栏顶部快捷按键',
+          'old': '旧版随动对比（注意向下滑动，按钮被滚到不可见深处）'
+        };
+        showToast('已切换至：' + names[layout]);
+      });
+    });
+
+    // 背景环境切换器
+    document.querySelectorAll('[data-bg-set]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-bg-set]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const bg = btn.dataset.bgSet;
+        const stage = document.getElementById('stage');
+        stage.className = 'workspace-stage ' + bg;
+      });
+    });
+
+    // 填充超多角色（测试滚动）
+    document.getElementById('btn-fill-chars').addEventListener('click', () => {
+      const mockNames = ['银发剑士', '神秘法师', '炼金术士', '机械工匠', '潜行盗贼', '边境骑士', '预言者', '帝国密探', '黑市商人', '游民斥候'];
+      mockNames.forEach((n, idx) => {
+        const gIdx = idx % groups.length;
+        if (!groups[gIdx].members.includes(n)) {
+          groups[gIdx].members.push(n);
+        }
+      });
+      renderCharList();
+      showToast('已载入 10+ 虚拟角色，请观察左侧滚动条与底栏新增按键的常驻表现！');
+    });
+
+    // 底栏空缺处常驻按键（用户指定位置）
+    document.getElementById('footer-add-char').addEventListener('click', () => addCharacterPrompt());
+    document.getElementById('footer-add-group').addEventListener('click', () => addGroupPrompt());
+
+    // 侧栏底部常驻按键
+    document.getElementById('dock-add-char').addEventListener('click', () => addCharacterPrompt());
+    document.getElementById('dock-add-group').addEventListener('click', () => addGroupPrompt());
+
+    // 顶部快捷按键
+    document.getElementById('quick-add-char').addEventListener('click', () => addCharacterPrompt());
+    document.getElementById('quick-add-group').addEventListener('click', () => addGroupPrompt());
+
+    // 旧版按键（用于对照）
+    document.getElementById('old-add-char').addEventListener('click', () => addCharacterPrompt());
+    document.getElementById('old-add-group').addEventListener('click', () => addGroupPrompt());
+
+    // 侧边栏内部事件委托
+    charListEl.addEventListener('click', ev => {
+      const target = ev.target;
+
+      // 组内直接新增角色（方案C）
+      const grpAdd = target.closest('[data-act="grp-add-char"]');
+      if (grpAdd) {
+        ev.stopPropagation();
+        addCharacterPrompt(grpAdd.dataset.gid);
+        return;
+      }
+
+      // 组开关 Checkbox
+      if (target.classList.contains('eca-group-toggle')) {
+        const g = groups.find(x => x.id === target.dataset.gid);
+        if (g) {
+          g.enabled = target.checked;
+          renderCharList();
+          showToast(`「${g.name}」提示词注入已${g.enabled ? '开启' : '暂停'}`);
+        }
+        return;
+      }
+
+      // 组改名
+      const grpRename = target.closest('[data-act="grp-rename"]');
+      if (grpRename) {
+        ev.stopPropagation();
+        const g = groups.find(x => x.id === grpRename.dataset.gid);
+        if (!g) return;
+        const newName = prompt('修改分组名称：', g.name);
+        if (newName && newName.trim()) {
+          g.name = newName.trim();
+          renderCharList();
+          showToast(`分组已更名为「${g.name}」`);
+        }
+        return;
+      }
+
+      // 组删除
+      const grpDel = target.closest('[data-act="grp-del"]');
+      if (grpDel) {
+        ev.stopPropagation();
+        if (groups.length <= 1) {
+          showToast('至少须保留一个分组！', true);
+          return;
+        }
+        const g = groups.find(x => x.id === grpDel.dataset.gid);
+        if (!confirm(`确认删除分组「${g.name}」？组内角色将移至第一组。`)) return;
+
+        const targetG = groups.find(x => x.id !== g.id);
+        targetG.members.push(...g.members);
+        groups = groups.filter(x => x.id !== g.id);
+        renderCharList();
+        showToast(`分组「${g.name}」已删除，成员已回迁`);
+        return;
+      }
+
+      // 角色删除
+      const charDel = target.closest('.eca-char-del');
+      if (charDel) {
+        ev.stopPropagation();
+        const name = charDel.dataset.name;
+        if (!confirm(`确认删除角色「${name}」及其全部头像？`)) return;
+        groups.forEach(g => {
+          g.members = g.members.filter(m => m !== name);
+        });
+        delete avatarDb[name];
+        if (selectedCharacter === name) {
+          const firstChar = groups.flatMap(g => g.members)[0] || null;
+          selectedCharacter = firstChar;
+        }
+        renderCharList();
+        renderDetailGrid();
+        showToast(`已删除角色「${name}」`);
+        return;
+      }
+
+      // 组展开/折叠
+      const grpHead = target.closest('.eca-group-head');
+      if (grpHead) {
+        const gid = grpHead.parentElement.dataset.gid;
+        collapsedGroups[gid] = !collapsedGroups[gid];
+        renderCharList();
+        return;
+      }
+
+      // 选择角色
+      const charItem = target.closest('.eca-char-item');
+      if (charItem && charItem.dataset.name) {
+        selectedCharacter = charItem.dataset.name;
+        renderCharList();
+        renderDetailGrid();
+      }
+    });
+
+    // 拖拽移动角色跨组
+    charListEl.addEventListener('dragstart', ev => {
+      const item = ev.target.closest('.eca-char-item');
+      if (item && item.dataset.name) {
+        ev.dataTransfer.setData('text/plain', item.dataset.name);
+        item.classList.add('eca-dragging');
+      }
+    });
+    charListEl.addEventListener('dragend', ev => {
+      const item = ev.target.closest('.eca-char-item');
+      if (item) item.classList.remove('eca-dragging');
+      document.querySelectorAll('.eca-drop-hover').forEach(el => el.classList.remove('eca-drop-hover'));
+    });
+    charListEl.addEventListener('dragover', ev => {
+      const body = ev.target.closest('.eca-group-body');
+      if (body) {
+        ev.preventDefault();
+        body.classList.add('eca-drop-hover');
+      }
+    });
+    charListEl.addEventListener('dragleave', ev => {
+      const body = ev.target.closest('.eca-group-body');
+      if (body) body.classList.remove('eca-drop-hover');
+    });
+    charListEl.addEventListener('drop', ev => {
+      const body = ev.target.closest('.eca-group-body');
+      if (!body) return;
+      ev.preventDefault();
+      body.classList.remove('eca-drop-hover');
+      const charName = ev.dataTransfer.getData('text/plain');
+      const targetGid = body.closest('.eca-group').dataset.gid;
+      if (!charName || !targetGid) return;
+
+      // 跨组转移
+      groups.forEach(g => {
+        const idx = g.members.indexOf(charName);
+        if (idx !== -1) g.members.splice(idx, 1);
+      });
+      const targetGroup = groups.find(g => g.id === targetGid);
+      if (targetGroup) targetGroup.members.push(charName);
+
+      renderCharList();
+      renderDetailGrid();
+      showToast(`「${charName}」已移入「${targetGroup.name}」`);
+    });
+
+    // 右侧格子点击上传图片
+    gridEl.addEventListener('click', ev => {
+      const cell = ev.target.closest('.eca-cell');
+      if (!cell || !cell.dataset.emotion || !selectedCharacter) return;
+      activeUploadEmotion = cell.dataset.emotion;
+      fileUploader.click();
+    });
+
+    fileUploader.addEventListener('change', () => {
+      const file = fileUploader.files && fileUploader.files[0];
+      fileUploader.value = '';
+      if (!file || !activeUploadEmotion || !selectedCharacter) return;
+
+      const reader = new FileReader();
+      reader.onload = e => {
+        if (!avatarDb[selectedCharacter]) avatarDb[selectedCharacter] = {};
+        avatarDb[selectedCharacter][activeUploadEmotion] = e.target.result;
+        renderDetailGrid();
+        showToast(`已为「${selectedCharacter}」设定「${activeUploadEmotion}」头像！`);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // 角色改名
+    document.getElementById('eca-rename-btn').addEventListener('click', () => {
+      if (!selectedCharacter) return;
+      const newName = prompt('修改角色名称：', selectedCharacter);
+      if (!newName || !newName.trim() || newName.trim() === selectedCharacter) return;
+      const trimmed = newName.trim();
+
+      // 改名数据库键
+      if (avatarDb[selectedCharacter]) {
+        avatarDb[trimmed] = avatarDb[selectedCharacter];
+        delete avatarDb[selectedCharacter];
+      }
+      groups.forEach(g => {
+        const idx = g.members.indexOf(selectedCharacter);
+        if (idx !== -1) g.members[idx] = trimmed;
+      });
+      selectedCharacter = trimmed;
+      renderCharList();
+      renderDetailGrid();
+      showToast(`角色已更名为「${trimmed}」`);
+    });
+
+    // 滑块尺寸变化
+    sizeRangeEl.addEventListener('input', () => {
+      currentSize = parseFloat(sizeRangeEl.value);
+      updateSizePreview();
+    });
+
+    // 弹窗显隐控制
+    const panelModal = document.getElementById('eca-panel');
+    document.getElementById('eca-close-btn').addEventListener('click', () => {
+      panelModal.style.display = 'none';
+      showToast('面板已关闭，可通过上方「重置/打开面板」重新呼出');
+    });
+    document.getElementById('btn-toggle-modal').addEventListener('click', () => {
+      panelModal.style.display = 'flex';
+      renderCharList();
+      renderDetailGrid();
+      showToast('已唤出情绪头像管理面板');
+    });
+
+    // 批量导入弹窗控制
+    const batchModal = document.getElementById('eca-batch-panel');
+    document.getElementById('eca-batch-btn').addEventListener('click', () => {
+      document.getElementById('batch-title').textContent = `批量导入「${selectedCharacter}」合集大图`;
+      batchModal.style.display = 'flex';
+    });
+    document.getElementById('btn-open-batch').addEventListener('click', () => {
+      document.getElementById('batch-title').textContent = `批量导入「${selectedCharacter}」合集大图`;
+      batchModal.style.display = 'flex';
+    });
+    document.getElementById('batch-close-btn').addEventListener('click', () => batchModal.style.display = 'none');
+    document.getElementById('batch-cancel-btn').addEventListener('click', () => batchModal.style.display = 'none');
+    document.getElementById('batch-confirm-btn').addEventListener('click', () => {
+      batchModal.style.display = 'none';
+      showToast(`「${selectedCharacter}」表情切分导入完成！`);
+    });
+  }
+
+  // 初始化
+  function init() {
+    renderCharList();
+    renderDetailGrid();
+    bindEvents();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

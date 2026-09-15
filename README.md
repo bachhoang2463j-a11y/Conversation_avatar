@@ -19,7 +19,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 ## 快速上手
 
 1. 魔法棒菜单 → **情绪头像**
-2. 左侧 **＋ 新增角色**：输入角色名（须与 AI 输出的角色名逐字一致）
+2. 面板底栏 **＋ 新增角色** / **＋ 新增分组**：输入角色名（须与 AI 输出的角色名逐字一致），可创建手风琴分组管理不同会话/卡片的角色
 3. 为角色配置头像，三种方式：
    - **单格上传**：点击对应情绪的格子，选一张图片（自动降采样到长边 ≤256px）
    - **多选导入**：在任意格子处打开文件选择框后**一次选中多张**，按文件名自动匹配情绪——文件名里包含哪个情绪词（如 `弗兰克-微笑(2).png`、`惊讶.jpg`）就归入哪个格子；文件名不含任何情绪词的图片会跳过并提示
@@ -50,7 +50,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 | 数据 | 位置 | 说明 |
 |---|---|---|
 | 头像图片 | 浏览器 IndexedDB `EmotionAvatarDB` | 主键 `角色名_情绪`，全局角色库（不绑角色卡，换卡/群聊通用） |
-| 登记名单、开关、尺寸、裁剪比例 | localStorage（`emoavatar_*`） | |
+| 登记名单、分组、开关、尺寸、裁剪比例 | localStorage（`emoavatar_*`） | |
 
 头像显示大小：面板底部滑条（1.5–5em），即时生效，已渲染楼层无需重扫。
 
@@ -74,6 +74,6 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 开发与测试
 
-- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），36 个用例覆盖渲染、容错、两列布局、注入、存储、面板、多选导入、批量导入
+- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），40+ 个用例覆盖渲染、容错、两列布局、注入、存储、面板、多选导入、批量导入、分组管理
 - 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行）
 - `node --check emotion-avatar.js` 语法校验

@@ -283,20 +283,16 @@ test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）'
   // p.eca-p flex 行：头像 + 单个 .eca-text 文字块，两个 flex 项
   assert(p1.classList.contains('eca-p'), '段首头像段落应加 .eca-p 类');
   var cs1 = getComputedStyle(p1);
-  assert(cs1.display === 'flex' && cs1.alignItems === 'center', '应为 flex 行且垂直居中：' + cs1.display + '/' + cs1.alignItems);
+  assert(cs1.display === 'flex' && cs1.alignItems === 'flex-start', '应为 flex 行且顶端对齐：' + cs1.display + '/' + cs1.alignItems);
   var txt1 = p1.querySelector(':scope > .eca-text');
   assert(txt1, '头像后的内容应包进 .eca-text');
   assert(p1.children.length === 2, 'p 应只有头像+文字块两个子元素，实际 ' + p1.children.length);
   assert(txt1.textContent.indexOf('端起了枪') !== -1, '文字内容丢失');
   var tr1 = txt1.getBoundingClientRect(), ar1 = img.getBoundingClientRect();
-  assert(Math.abs((tr1.top + tr1.height / 2) - (ar1.top + ar1.height / 2)) < 2,
-    '单行文字块中心应与头像中心对齐：偏差 ' + ((tr1.top + tr1.height / 2) - (ar1.top + ar1.height / 2)) + 'px');
+  assert(Math.abs(tr1.top - ar1.top) < 10,
+    '文字块顶端应与头像顶端光学对齐：偏差 ' + (tr1.top - ar1.top) + 'px');
   assert(tr1.left >= ar1.right - 1, '文字块应在头像右侧');
-  // 垂直居中回归锁（三轮真实缺陷史）：
-  // v1 纯 CSS :has 简单段落 flex → <q> 使判定失效，居中从未生效
-  // v2 p:has 全量 flex → 文本与 <q> 拆成并排 flex 项，整段横排压缩
-  // v3 translateY（段落 block）→ 文字永远顶对齐，单行不居中
-  // 最终方案：JS 包裹 .eca-text + p.eca-p 两项 flex，文字块内部行内流不变
+  // 方案一：精装书志（首行光学平齐，多行台词不浮空）
   var mes2 = __addFloor('<p>{弗兰克(微笑)}“嗯。”<em>他强调道</em>，随后离开。</p>', false);
   var mes3 = __addFloor('<p>{弗兰克(微笑)}<q>“看不见的敌人？”</q>他咧嘴一笑，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲。</p>', false);
   window.EmoAvatar.scanAll();
@@ -308,9 +304,9 @@ test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）'
     var emEl = txtx.querySelector('em');
     assert(qEl || emEl || i === 0, '段落' + i + ' 的 <q>/<em> 应在文字块内部');
     var imgx = pp.querySelector('img.eca-avatar');
-    var pr = pp.getBoundingClientRect(), ax = imgx.getBoundingClientRect(), tx = txtx.getBoundingClientRect();
-    assert(Math.abs((tx.top + tx.height / 2) - (ax.top + ax.height / 2)) < 2,
-      '段落' + i + ' 文字块未与头像垂直居中：偏差 ' + ((tx.top + tx.height / 2) - (ax.top + ax.height / 2)) + 'px');
+    var ax = imgx.getBoundingClientRect(), tx = txtx.getBoundingClientRect();
+    assert(Math.abs(tx.top - ax.top) < 10,
+      '段落' + i + ' 文字块未与头像顶端对齐：偏差 ' + (tx.top - ax.top) + 'px');
   });
   // 长段落：文字块内部正常折行（多行），占满右列，不被横向压扁
   var p4 = mes3.querySelector('p');
