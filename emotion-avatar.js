@@ -51,20 +51,66 @@
 
     // ============================================
     // 设置与角色登记表（localStorage）
+    // groups: [{id, name, enabled, members:[角色名]}]；characters 为拍平索引（isRegistered 等零改动）
+    // 组开关只控制提示词注入（角色卡切换用），不影响已渲染头像与素材库
     // ============================================
     let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1' };
-    /** 已登记角色名列表（角色名即主键，全局跨卡跨聊天） */
     let characters = [];
+    let groups = [];
+    let groupSeq = 1;
+    const LS_GROUPS = 'emoavatar_groups';
+
+    function makeGroupId() { return 'g' + Date.now().toString(36) + (groupSeq++); }
+
+    /** 由 groups 重建拍平索引（任何组结构变更后调用） */
+    function rebuildCharacterIndex() {
+        characters = [];
+        groups.forEach(function (g) {
+            Array.prototype.push.apply(characters, g.members);
+        });
+    }
+
+    function findGroupByChar(name) {
+        for (let i = 0; i < groups.length; i++) {
+            if (groups[i].members.indexOf(name) !== -1) return groups[i];
+        }
+        return null;
+    }
 
     function loadState() {
-        try { characters = JSON.parse(topWindow.localStorage.getItem(LS_CHARACTERS)) || []; } catch (e) { characters = []; }
+        try {
+            const stored = JSON.parse(topWindow.localStorage.getItem(LS_GROUPS));
+            if (Array.isArray(stored) && stored.length) {
+                groups = stored.filter(function (g) {
+                    return g && typeof g.name === 'string' && Array.isArray(g.members);
+                }).map(function (g) {
+                    return { id: g.id || makeGroupId(), name: g.name, enabled: g.enabled !== false, members: g.members.slice() };
+                });
+            }
+        } catch (e) { /* 保持空 */ }
+        // 迁移：旧版扁平角色表 → 单一默认组
+        try {
+            const legacy = JSON.parse(topWindow.localStorage.getItem(LS_CHARACTERS));
+            if (!groups.length && Array.isArray(legacy) && legacy.length) {
+                groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: legacy.slice() }];
+            }
+        } catch (e) { /* 无旧数据 */ }
+        if (!groups.length) {
+            groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: [] }];
+        }
+        rebuildCharacterIndex();
         try {
             const s = JSON.parse(topWindow.localStorage.getItem(LS_SETTINGS));
             if (s && typeof s === 'object') Object.assign(settings, s);
         } catch (e) { /* 保持默认 */ }
     }
+
     function persistCharacters() {
-        try { topWindow.localStorage.setItem(LS_CHARACTERS, JSON.stringify(characters)); } catch (e) { /* 存储失败不阻塞 */ }
+        try {
+            topWindow.localStorage.setItem(LS_GROUPS, JSON.stringify(groups));
+            // 兼容旧字段同步写一份扁平表（回滚旧版脚本不丢人）
+            topWindow.localStorage.setItem(LS_CHARACTERS, JSON.stringify(characters));
+        } catch (e) { /* 存储失败不阻塞 */ }
     }
     function persistSettings() {
         try { topWindow.localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) { /* 存储失败不阻塞 */ }
@@ -291,11 +337,21 @@
     // ============================================
     let uninjectHandle = null;
 
+    /** 参与提示词注入的角色：仅启用组内的成员（组开关 = 角色卡切换） */
+    function getInjectionCharacters() {
+        const list = [];
+        groups.forEach(function (g) {
+            if (g.enabled) Array.prototype.push.apply(list, g.members);
+        });
+        return list;
+    }
+
     function buildPrompt() {
-        if (!characters.length) return null;
-        const list = characters.join('、');
-        // 示例取第一个登记角色，与其同名的对话片段对齐
-        const hero = characters[0];
+        const injectable = getInjectionCharacters();
+        if (!injectable.length) return null;
+        const list = injectable.join('、');
+        // 示例取第一个注入角色，与其同名的对话片段对齐
+        const hero = injectable[0];
         const example = '{' + hero + '(大笑)}“看不见的敌人？”' + hero
             + '咧嘴一笑，那笑容里带着一股嗜血的狠劲，“那最好不过了。看不见的东西，通常也躲不开这种口径的子弹。”';
         return '<头像标记>\n'
@@ -313,7 +369,7 @@
             try { uninjectHandle.uninject(); } catch (e) { /* 句柄可能已随脚本卸载失效 */ }
             uninjectHandle = null;
         }
-        if (!settings.enabled || !characters.length) return;
+        if (!settings.enabled || !getInjectionCharacters().length) return;
         const content = buildPrompt();
         if (!content) return;
         try {
@@ -499,6 +555,23 @@
         + '#eca-panel .eca-char-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
         + '#eca-panel .eca-char-del{background:none;border:0;color:#c66;cursor:pointer;font-size:12px;padding:0 2px;}'
         + '#eca-panel .eca-add{margin-top:auto;padding:6px;border-radius:6px;border:1px dashed #555;background:none;color:#9bd;cursor:pointer;}'
+        // 人物组手风琴
+        + '#eca-panel .eca-group{border:1px solid #333844;border-radius:6px;margin-bottom:6px;background:#262a33;overflow:hidden;}'
+        + '#eca-panel .eca-group-head{display:flex;align-items:center;gap:5px;padding:5px 8px;cursor:pointer;user-select:none;}'
+        + '#eca-panel .eca-group-head:hover{background:#2c313c;}'
+        + '#eca-panel .eca-group-arrow{width:1em;color:#8ab;transition:transform .15s;flex:0 0 auto;text-align:center;}'
+        + '#eca-panel .eca-group.collapsed .eca-group-arrow{transform:rotate(-90deg);}'
+        + '#eca-panel .eca-group-name{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;}'
+        + '#eca-panel .eca-group-count{color:#778;font-size:11px;flex:0 0 auto;}'
+        + '#eca-panel .eca-group-off .eca-group-name,#eca-panel .eca-group-off .eca-group-count{color:#666;text-decoration:line-through;}'
+        + '#eca-panel .eca-group-toggle{flex:0 0 auto;cursor:pointer;margin:0;}'
+        + '#eca-panel .eca-group-btn{background:none;border:0;color:#8895a8;cursor:pointer;font-size:11px;padding:0 2px;flex:0 0 auto;}'
+        + '#eca-panel .eca-group-btn:hover{color:#fff;}'
+        + '#eca-panel .eca-group-body{padding:4px 6px 6px;display:flex;flex-direction:column;gap:4px;min-height:14px;border-top:1px solid #333844;}'
+        + '#eca-panel .eca-group.collapsed .eca-group-body{display:none;}'
+        + '#eca-panel .eca-group-body.eca-drop-hover{background:rgba(45,95,138,.35);outline:1px dashed #4a90c4;outline-offset:-3px;}'
+        + '#eca-panel .eca-char-item[draggable]{cursor:grab;}'
+        + '#eca-panel .eca-char-item.eca-dragging{opacity:.4;}'
         + '#eca-panel .eca-detail{flex:1;padding:12px 16px;overflow-y:auto;}'
         + '#eca-panel .eca-detail-empty{color:#777;padding:40px 0;text-align:center;}'
         + '#eca-panel .eca-detail-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}'
@@ -588,21 +661,25 @@
         });
     }
 
-    // ---------- 角色登记操作（面板与调试桥共用，全部持久化） ----------
-    function addCharacter(name) {
+    // ---------- 角色与组操作（面板与调试桥共用，全部持久化） ----------
+    function addCharacter(name, groupId) {
         name = String(name || '').trim();
         if (!name || name.length > 30 || /[{}()]/.test(name)) return false;
         if (characters.indexOf(name) !== -1) return false;
-        characters.push(name);
+        const group = (groupId && groups.filter(function (g) { return g.id === groupId; })[0]) || groups[0];
+        if (!group) return false;
+        group.members.push(name);
+        rebuildCharacterIndex();
         persistCharacters();
         applyInjection();
         return true;
     }
 
     function removeCharacter(name) {
-        const i = characters.indexOf(name);
-        if (i === -1) return Promise.resolve(false);
-        characters.splice(i, 1);
+        const group = findGroupByChar(name);
+        if (!group) return Promise.resolve(false);
+        group.members.splice(group.members.indexOf(name), 1);
+        rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === name) selectedCharacter = characters[0] || null;
         applyInjection();
@@ -613,13 +690,70 @@
         newName = String(newName || '').trim();
         if (!newName || newName.length > 30 || /[{}()]/.test(newName)) return Promise.resolve(false);
         if (characters.indexOf(newName) !== -1) return Promise.resolve(false);
-        const i = characters.indexOf(oldName);
-        if (i === -1) return Promise.resolve(false);
-        characters[i] = newName;
+        const group = findGroupByChar(oldName);
+        if (!group) return Promise.resolve(false);
+        group.members[group.members.indexOf(oldName)] = newName;
+        rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === oldName) selectedCharacter = newName;
         applyInjection();
         return renameCharacterAvatars(oldName, newName).then(function () { return true; });
+    }
+
+    // ---------- 人物组操作 ----------
+    function addGroup(name) {
+        name = String(name || '').trim() || ('分组 ' + (groups.length + 1));
+        if (groups.some(function (g) { return g.name === name; })) return null;
+        const g = { id: makeGroupId(), name: name, enabled: true, members: [] };
+        groups.push(g);
+        persistCharacters();
+        return g;
+    }
+
+    function removeGroup(groupId) {
+        const i = groups.findIndex(function (g) { return g.id === groupId; });
+        if (i === -1 || groups.length <= 1) return false; // 至少保留一个组
+        const removed = groups.splice(i, 1)[0];
+        // 组内角色迁回第一个剩余组（素材保留，避免误删）
+        const target = groups[0];
+        removed.members.forEach(function (name) {
+            if (target.members.indexOf(name) === -1) target.members.push(name);
+        });
+        rebuildCharacterIndex();
+        persistCharacters();
+        applyInjection();
+        return true;
+    }
+
+    function toggleGroup(groupId, enabled) {
+        const g = groups.filter(function (x) { return x.id === groupId; })[0];
+        if (!g) return false;
+        g.enabled = !!enabled;
+        persistCharacters();
+        applyInjection();
+        return true;
+    }
+
+    function renameGroup(groupId, newName) {
+        newName = String(newName || '').trim();
+        const g = groups.filter(function (x) { return x.id === groupId; })[0];
+        if (!g || !newName || groups.some(function (x) { return x.name === newName && x.id !== groupId; })) return false;
+        g.name = newName;
+        persistCharacters();
+        return true;
+    }
+
+    /** 拖拽落点：把角色移入目标组 */
+    function moveCharacterToGroup(name, groupId) {
+        const from = findGroupByChar(name);
+        const to = groups.filter(function (g) { return g.id === groupId; })[0];
+        if (!from || !to || from === to) return false;
+        from.members.splice(from.members.indexOf(name), 1);
+        to.members.push(name);
+        rebuildCharacterIndex();
+        persistCharacters();
+        applyInjection();
+        return true;
     }
 
     /** 单格上传入口：降采样（长边 256）后入库 */
@@ -678,9 +812,10 @@
             + '  <div class="eca-header"><span>情绪头像管理</span><button class="eca-close" title="关闭">×</button></div>'
             + '  <div class="eca-body">'
             + '    <div class="eca-side">'
-            + '      <div class="eca-side-title">已登记角色</div>'
+            + '      <div class="eca-side-title">已登记角色（可拖拽分组）</div>'
             + '      <div id="eca-char-list"></div>'
-            + '      <button class="eca-add" id="eca-add-char">＋ 新增角色</button>'
+            + '      <button class="eca-add" id="eca-add-group">＋ 新增分组</button>'
+            + '      <button class="eca-add" id="eca-add-char" style="margin-top:6px;">＋ 新增角色</button>'
             + '    </div>'
             + '    <div class="eca-detail" id="eca-detail"></div>'
             + '  </div>'
@@ -702,17 +837,44 @@
         return root;
     }
 
+    /** 手风琴展开状态（gid → true 折叠），不持久化 */
+    const collapsedGroups = {};
+
     function bindPanelEvents(root) {
         root.querySelector('.eca-close').addEventListener('click', closePanel);
         root.addEventListener('click', function (ev) {
             const target = ev.target;
             if (target.id === 'eca-add-char') { addCharacterFlow(); return; }
+            if (target.id === 'eca-add-group') { addGroupFlow(); return; }
+            // 组开关（checkbox）：点击不冒泡到折叠
+            if (target.classList && target.classList.contains('eca-group-toggle')) {
+                toggleGroup(target.dataset.gid, target.checked);
+                renderPanel();
+                const g = groups.filter(function (x) { return x.id === target.dataset.gid; })[0];
+                toast('「' + (g ? g.name : '') + '」注入已' + (target.checked ? '开启' : '关闭')
+                    + (target.checked ? '' : '（组内角色不再注入提示词，头像渲染不受影响）'));
+                return;
+            }
+            const grpBtn = target.closest ? target.closest('.eca-group-btn') : null;
+            if (grpBtn) {
+                if (grpBtn.dataset.act === 'grp-rename') renameGroupFlow(grpBtn.dataset.gid);
+                else if (grpBtn.dataset.act === 'grp-del') removeGroupFlow(grpBtn.dataset.gid);
+                return;
+            }
             const del = target.closest ? target.closest('.eca-char-del') : null;
             if (del) { removeCharacterFlow(del.dataset.name); return; }
             const rename = target.closest ? target.closest('#eca-rename-btn') : null;
             if (rename) { renameCharacterFlow(selectedCharacter); return; }
             const batch = target.closest ? target.closest('#eca-batch-btn') : null;
             if (batch) { openBatchDialog(selectedCharacter); return; }
+            // 组头点击：折叠/展开（点名字区域或箭头）
+            const head = target.closest ? target.closest('.eca-group-head') : null;
+            if (head) {
+                const gid = head.parentElement.dataset.gid;
+                collapsedGroups[gid] = !collapsedGroups[gid];
+                renderPanel();
+                return;
+            }
             const item = target.closest ? target.closest('.eca-char-item') : null;
             if (item && item.dataset.name) {
                 selectedCharacter = item.dataset.name;
@@ -723,6 +885,48 @@
             if (cell && cell.dataset.emotion && selectedCharacter) {
                 fileInputEl.dataset.emotion = cell.dataset.emotion;
                 fileInputEl.click();
+            }
+        });
+        // 组名双击重命名
+        root.addEventListener('dblclick', function (ev) {
+            const name = ev.target.closest ? ev.target.closest('.eca-group-name') : null;
+            if (name) renameGroupFlow(name.closest('.eca-group').dataset.gid);
+        });
+        // 拖拽：角色 → 组（dragstart/dragover/drop 事件不冒泡为 click）
+        root.addEventListener('dragstart', function (ev) {
+            const item = ev.target.closest ? ev.target.closest('.eca-char-item') : null;
+            if (!item || !item.dataset.name) return;
+            ev.dataTransfer.setData('text/plain', item.dataset.name);
+            ev.dataTransfer.effectAllowed = 'move';
+            item.classList.add('eca-dragging');
+        });
+        root.addEventListener('dragend', function (ev) {
+            const item = ev.target.closest ? ev.target.closest('.eca-char-item') : null;
+            if (item) item.classList.remove('eca-dragging');
+            root.querySelectorAll('.eca-drop-hover').forEach(function (el) { el.classList.remove('eca-drop-hover'); });
+        });
+        root.addEventListener('dragover', function (ev) {
+            const body = ev.target.closest ? ev.target.closest('.eca-group-body') : null;
+            if (!body) return;
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+            body.classList.add('eca-drop-hover');
+        });
+        root.addEventListener('dragleave', function (ev) {
+            const body = ev.target.closest ? ev.target.closest('.eca-group-body') : null;
+            if (body) body.classList.remove('eca-drop-hover');
+        });
+        root.addEventListener('drop', function (ev) {
+            const body = ev.target.closest ? ev.target.closest('.eca-group-body') : null;
+            if (!body) return;
+            ev.preventDefault();
+            body.classList.remove('eca-drop-hover');
+            const name = ev.dataTransfer.getData('text/plain');
+            const gid = body.closest('.eca-group').dataset.gid;
+            if (name && moveCharacterToGroup(name, gid)) {
+                renderPanel();
+                const g = groups.filter(function (x) { return x.id === gid; })[0];
+                toast('「' + name + '」已移入「' + (g ? g.name : '') + '」');
             }
         });
         fileInputEl.addEventListener('change', function () {
@@ -823,16 +1027,33 @@
             selectedCharacter = characters[0] || null;
         }
         if (!selectedCharacter && characters.length) selectedCharacter = characters[0];
-        // 角色列表
+        // 角色列表：按组渲染手风琴
         const listBox = panelEl.querySelector('#eca-char-list');
-        listBox.innerHTML = characters.length
-            ? characters.map(function (name) {
-                return '<div class="eca-char-item' + (name === selectedCharacter ? ' active' : '') + '" data-name="' + escapeHtml(name) + '">'
-                    + '<span class="eca-char-name">' + escapeHtml(name) + '</span>'
-                    + '<button class="eca-char-del" data-name="' + escapeHtml(name) + '" title="删除角色及头像">✕</button>'
-                    + '</div>';
-            }).join('')
-            : '<div class="eca-detail-empty" style="padding:12px 0;">暂无角色</div>';
+        listBox.innerHTML = groups.map(function (g) {
+            const collapsed = collapsedGroups[g.id] ? ' collapsed' : '';
+            const off = g.enabled ? '' : ' eca-group-off';
+            const head = '<div class="eca-group-head">'
+                + '<span class="eca-group-arrow">▼</span>'
+                + '<input type="checkbox" class="eca-group-toggle" data-gid="' + g.id + '"'
+                + (g.enabled ? ' checked' : '') + ' title="组开关：关闭后组内角色不注入提示词（头像渲染不受影响）">'
+                + '<span class="eca-group-name" title="双击重命名">' + escapeHtml(g.name) + '</span>'
+                + '<span class="eca-group-count">' + g.members.length + '</span>'
+                + '<button class="eca-group-btn" data-act="grp-rename" data-gid="' + g.id + '" title="重命名组">✎</button>'
+                + '<button class="eca-group-btn" data-act="grp-del" data-gid="' + g.id + '" title="删除组（组内角色迁回第一个组）">✕</button>'
+                + '</div>';
+            const members = g.members.length
+                ? g.members.map(function (name) {
+                    return '<div class="eca-char-item' + (name === selectedCharacter ? ' active' : '') + '" draggable="true" data-name="' + escapeHtml(name) + '">'
+                        + '<span class="eca-char-name">' + escapeHtml(name) + '</span>'
+                        + '<button class="eca-char-del" data-name="' + escapeHtml(name) + '" title="删除角色及头像">✕</button>'
+                        + '</div>';
+                }).join('')
+                : '<div class="eca-detail-empty" style="padding:8px 0;color:#556;font-size:11px;">拖人物到此（空组）</div>';
+            return '<div class="eca-group' + collapsed + off + '" data-gid="' + g.id + '">'
+                + head
+                + '<div class="eca-group-body">' + members + '</div>'
+                + '</div>';
+        }).join('');
         // 角色详情
         const detail = panelEl.querySelector('#eca-detail');
         if (!selectedCharacter) {
@@ -893,6 +1114,36 @@
         } else {
             toast('角色名无效（1-30 字，不含花括号/圆括号）或已存在', true);
         }
+    }
+
+    function addGroupFlow() {
+        const name = uiPrompt('新增分组名（如：本卡角色 / 备用角色）：', '');
+        if (name === null) return;
+        const g = addGroup(name);
+        if (g) {
+            collapsedGroups[g.id] = false;
+            renderPanel();
+            toast('已新建分组「' + g.name + '」，可拖拽角色进入');
+        } else {
+            toast('分组名无效或已存在', true);
+        }
+    }
+
+    function removeGroupFlow(gid) {
+        const g = groups.filter(function (x) { return x.id === gid; })[0];
+        if (!g) return;
+        if (groups.length <= 1) { toast('至少保留一个分组', true); return; }
+        if (!uiConfirm('删除分组「' + g.name + '」？组内角色会迁回第一个分组（头像保留）')) return;
+        if (removeGroup(gid)) { renderPanel(); toast('已删除分组「' + g.name + '」'); }
+    }
+
+    function renameGroupFlow(gid) {
+        const g = groups.filter(function (x) { return x.id === gid; })[0];
+        if (!g) return;
+        const newName = uiPrompt('修改分组名：', g.name);
+        if (newName === null || newName === g.name) return;
+        if (renameGroup(gid, newName)) { renderPanel(); toast('已改名「' + newName + '」'); }
+        else toast('分组名无效或已存在', true);
     }
 
     function removeCharacterFlow(name) {
@@ -1293,7 +1544,11 @@
         /** 调试/harness 桥：直接向内存缓存塞头像（不落库） */
         seedAvatar(name, emotion, src) { avatarCache.set(name + '_' + emotion, src); },
         /** 调试/harness 桥：整体替换登记名单（不落 localStorage，但会同步重注提示词） */
-        setCharacters(list) { characters = list.slice(); applyInjection(); },
+        setCharacters(list) {
+            groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: list.slice() }];
+            rebuildCharacterIndex();
+            applyInjection();
+        },
         getCharacters() { return characters.slice(); },
         setEnabled: setEnabled,
         setSize: setSize,
@@ -1311,12 +1566,25 @@
             avatarCache.clear();
         },
         /* 登记操作桥（持久化） */
-        setCharactersPersist(list) { characters = list.slice(); persistCharacters(); applyInjection(); },
+        setCharactersPersist(list) {
+            groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: list.slice() }];
+            rebuildCharacterIndex();
+            persistCharacters();
+            applyInjection();
+        },
         addCharacter: addCharacter,
         removeCharacter: removeCharacter,
         renameCharacter: renameCharacter,
         uploadAvatarFile: uploadAvatarFile,
         matchEmotionFromName: matchEmotionFromName,
+        /* 人物组桥 */
+        getGroups() { return JSON.parse(JSON.stringify(groups)); },
+        addGroup: addGroup,
+        removeGroup: removeGroup,
+        toggleGroup: toggleGroup,
+        renameGroup: renameGroup,
+        moveCharacterToGroup: moveCharacterToGroup,
+        getInjectionCharacters: getInjectionCharacters,
         /* 面板桥 */
         openPanel: openPanel,
         closePanel: closePanel,

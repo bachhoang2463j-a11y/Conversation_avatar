@@ -565,7 +565,103 @@ test('M4-9 文件名匹配情绪词', function () {
   assert(m('') === null, '空文件名应返回 null');
   assert(m('微笑和悲伤.png') === '微笑', '多命中应取最先出现者');
 });
-test('M4-10 多选导入按文件名自动匹配', function () {
+
+/* ---------- M6 用例：人物组 ---------- */
+test('M6-1 旧数据自动迁移进默认组', function () {
+  localStorage.setItem('emoavatar_groups', '[]');
+  localStorage.setItem('emoavatar_characters', JSON.stringify(['迁移侠A', '迁移侠B']));
+  window.EmoAvatar.setCharactersPersist(['迁移侠A', '迁移侠B']); // 重建单默认组
+  // 直接验证组模型：setCharactersPersist 后应有 1 组含两人
+  var gs = window.EmoAvatar.getGroups();
+  assert(gs.length === 1, '应有一个组：' + gs.length);
+  assert(gs[0].members.length === 2, '组成员数错误');
+  assert(gs[0].enabled === true, '默认组应启用');
+  assert(window.EmoAvatar.getCharacters().length === 2, '拍平索引错误');
+});
+test('M6-2 组开关过滤提示词注入', function () {
+  var gs = window.EmoAvatar.getGroups();
+  var g1 = gs[0];
+  var g2 = window.EmoAvatar.addGroup('二号组');
+  assert(g2 && g2.id, '建组失败');
+  window.EmoAvatar.addCharacter('组员X', g2.id);
+  window.EmoAvatar.addCharacter('组员Y', g2.id);
+  // 全开：4 人全部注入
+  var all = window.EmoAvatar.getInjectionCharacters();
+  assert(all.length === 4, '全开应 4 人注入：' + all.length);
+  // 关二号组：只剩默认组 2 人
+  window.EmoAvatar.toggleGroup(g2.id, false);
+  var after = window.EmoAvatar.getInjectionCharacters();
+  assert(after.length === 2, '关闭组后应 2 人注入：' + after.length);
+  assert(after.indexOf('组员X') === -1 && after.indexOf('组员Y') === -1, '关闭组成员仍被注入');
+  // 全组关闭：注入撤销（buildPrompt 为 null → applyInjection 不注）
+  window.EmoAvatar.toggleGroup(g1.id, false);
+  assert(window.EmoAvatar.getInjectionCharacters().length === 0, '全关后不应有注入角色');
+  window.__injectCalls = [];
+  window.EmoAvatar.applyInjection();
+  var p = __lastInject();
+  assert(p === null, '全组关闭仍注入了');
+  // 恢复
+  window.EmoAvatar.toggleGroup(g1.id, true);
+  window.EmoAvatar.toggleGroup(g2.id, true);
+});
+test('M6-3 组开关不影响头像渲染', function () {
+  __resetChat(); __seedM1();
+  var gs = window.EmoAvatar.getGroups();
+  var g1 = gs[0];
+  window.EmoAvatar.toggleGroup(g1.id, false);
+  var mes = __addFloor('{弗兰克(微笑)}“还在。”', false);
+  window.EmoAvatar.scanAll();
+  assert(mes.querySelector('img.eca-avatar'), '关闭组的角色头像仍应渲染');
+  window.EmoAvatar.toggleGroup(g1.id, true);
+});
+test('M6-4 移入组/删组迁移', function () {
+  window.EmoAvatar.setCharactersPersist(['甲', '乙']);
+  var g2 = window.EmoAvatar.addGroup('目标组');
+  assert(window.EmoAvatar.moveCharacterToGroup('乙', g2.id), '移入组失败');
+  var gs = window.EmoAvatar.getGroups();
+  var gB = gs.filter(function (g) { return g.id === g2.id; })[0];
+  assert(gB.members.indexOf('乙') !== -1, '乙应在目标组');
+  assert(window.EmoAvatar.moveCharacterToGroup('乙', g2.id) === false, '重复移入同组应失败');
+  // 删组：乙迁回第一个组
+  assert(window.EmoAvatar.removeGroup(g2.id), '删组失败');
+  gs = window.EmoAvatar.getGroups();
+  assert(gs.length === 1, '应剩一个组');
+  assert(gs[0].members.indexOf('乙') !== -1, '删组后成员未迁回');
+  // 仅剩一个组时不可删
+  assert(window.EmoAvatar.removeGroup(gs[0].id) === false, '最后一个组应不可删');
+});
+test('M6-5 面板手风琴渲染与组开关交互', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  var g2 = window.EmoAvatar.addGroup('卡B组');
+  window.EmoAvatar.addCharacter('罗兰', g2.id);
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  var groups = panel.querySelectorAll('.eca-group');
+  assert(groups.length === 2, '应渲染 2 个组：' + groups.length);
+  // 每组头部有开关、可折叠
+  var toggles = panel.querySelectorAll('.eca-group-toggle');
+  assert(toggles.length === 2, '应有 2 个组开关');
+  assert(panel.querySelectorAll('.eca-char-item[draggable]').length === 2, '角色项应可拖拽');
+  // 点击组头折叠（renderPanel 会重建 DOM，每次重新查询）
+  var head = panel.querySelector('.eca-group[data-gid="' + g2.id + '"] .eca-group-head');
+  head.click();
+  assert(panel.querySelector('.eca-group[data-gid="' + g2.id + '"]').classList.contains('collapsed'), '组头点击应折叠');
+  head = panel.querySelector('.eca-group[data-gid="' + g2.id + '"] .eca-group-head');
+  head.click();
+  assert(!panel.querySelector('.eca-group[data-gid="' + g2.id + '"]').classList.contains('collapsed'), '再点应展开');
+  // 点击开关（.click() 真实切换 checked 并冒泡；dispatchEvent 不会触发默认切换）
+  window.__injectCalls = [];
+  var cb = panel.querySelector('.eca-group[data-gid="' + g2.id + '"] .eca-group-toggle');
+  cb.click();
+  var gs = window.EmoAvatar.getGroups();
+  var g2After = gs.filter(function (g) { return g.name === '卡B组'; })[0];
+  assert(g2After.enabled === false, '开关未生效');
+  var lastCall = window.__injectCalls[window.__injectCalls.length - 1];
+  assert(lastCall && lastCall.prompts && lastCall.prompts[0].content.indexOf('罗兰') === -1,
+    '关闭组后注入名单应不含罗兰');
+  var groupsAfter = panel.querySelectorAll('.eca-group');
+  assert(!groupsAfter[1].classList.contains('collapsed'), '点开关不应折叠组');
+});test('M4-10 多选导入按文件名自动匹配', function () {
   window.EmoAvatar.setCharactersPersist(['多选侠']);
   window.EmoAvatar.openPanel();
   var input = document.querySelector('#eca-panel input[type=file]');
