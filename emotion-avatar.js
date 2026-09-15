@@ -96,16 +96,11 @@
         + 'min-height:var(--eca-size,2.5em);}'
         + '.mes_text :has(> .eca-avatar:first-child) > .eca-avatar:first-child,'
         + '.mes_text:has(> .eca-avatar:first-child) > .eca-avatar:first-child{'
-        + 'position:absolute;left:0;top:0;margin:0;'
+        + 'position:absolute;left:0;top:50%;transform:translateY(-50%);margin:0;'
         + 'width:var(--eca-size,2.5em);max-width:none;}'
-        // 头像段落的文字垂直居中。p 段落（markdown 渲染产物，子节点均为行内内容）
-        // 直接 flex 居中：连续文本与 <q>/<strong> 等行内元素会合并成单个匿名 flex
-        // 项，不会拆行（酒馆引号美化会把台词包成 <q>，多数对话段落都含它）；
-        // 非 p 的直接子节点容器有块级子元素风险，保留"简单段落才 flex"的保守判定
-        + '.mes_text p:has(> .eca-avatar:first-child){display:flex;align-items:center;}'
-        + '.mes_text :has(> .eca-avatar:first-child):not(:has(> :nth-child(2))),'
-        + '.mes_text:has(> .eca-avatar:first-child):not(:has(> :nth-child(2)))'
-        + '{display:flex;align-items:center;}';;
+        // 垂直居中不用 flex：flex 会把段落里的连续文本与 <q>/<em> 等拆成多个
+        // 并排 flex 项（默认不换行），整段被横向压扁。改由头像自身
+        // top:50%+translateY(-50%) 相对整段垂直居中，段落保持正常 block 文本流;;
 
     function injectStyles() {
         if (doc.getElementById('eca-styles')) return;
