@@ -84,7 +84,28 @@
         + 'color:rgba(190,190,190,.75);border:1px solid rgba(128,128,128,.35);border-radius:50%;'
         + 'user-select:none;overflow:hidden;}'
         + '.eca-avatar.eca-placeholder::after{content:"?";'
-        + 'font-size:calc(var(--eca-size,2.5em)*.5);}';
+        + 'font-size:calc(var(--eca-size,2.5em)*.5);}'
+        // 两列布局：头像是段落首个元素子节点时，头像占左列、整段文字占右列，
+        // 消除行内大图的 L 形绕排与锯齿左缘；标签在段中的段落不受影响。
+        // 两条选择器分别覆盖 markdown <p> 包裹与 .mes_text 直接子节点两种结构。
+        // 左列为方形容（宽=高=size）+ .3em 间隙，文字紧贴头像；列内头像强制填满容器，
+        // 超宽/超窄图由 cover 裁剪，间隙恒定
+        + '.mes_text :has(> .eca-avatar:first-child),'
+        + '.mes_text:has(> .eca-avatar:first-child){position:relative;'
+        + 'padding-left:calc(var(--eca-size,2.5em) + .3em);'
+        + 'min-height:var(--eca-size,2.5em);}'
+        + '.mes_text :has(> .eca-avatar:first-child) > .eca-avatar:first-child,'
+        + '.mes_text:has(> .eca-avatar:first-child) > .eca-avatar:first-child{'
+        + 'position:absolute;left:0;top:0;margin:0;'
+        + 'width:var(--eca-size,2.5em);max-width:none;}'
+        // 头像段落的文字垂直居中。p 段落（markdown 渲染产物，子节点均为行内内容）
+        // 直接 flex 居中：连续文本与 <q>/<strong> 等行内元素会合并成单个匿名 flex
+        // 项，不会拆行（酒馆引号美化会把台词包成 <q>，多数对话段落都含它）；
+        // 非 p 的直接子节点容器有块级子元素风险，保留"简单段落才 flex"的保守判定
+        + '.mes_text p:has(> .eca-avatar:first-child){display:flex;align-items:center;}'
+        + '.mes_text :has(> .eca-avatar:first-child):not(:has(> :nth-child(2))),'
+        + '.mes_text:has(> .eca-avatar:first-child):not(:has(> :nth-child(2)))'
+        + '{display:flex;align-items:center;}';;
 
     function injectStyles() {
         if (doc.getElementById('eca-styles')) return;
@@ -586,6 +607,18 @@
         });
     }
 
+    /** 文件名包含中文情绪名即命中；多个命中取最先出现者；无命中返回 null */
+    function matchEmotionFromName(name) {
+        let best = null;
+        let bestIdx = Infinity;
+        const text = String(name || '');
+        for (let i = 0; i < EMOTIONS.length; i++) {
+            const idx = text.indexOf(EMOTIONS[i]);
+            if (idx !== -1 && idx < bestIdx) { best = EMOTIONS[i]; bestIdx = idx; }
+        }
+        return best;
+    }
+
     // ---------- 面板 DOM ----------
     let panelEl = null;
     let selectedCharacter = null;
@@ -595,17 +628,23 @@
         if (doc.getElementById('eca-menu-btn')) return;
         const mount = doc.getElementById('extensionsMenu') || doc.getElementById('top-bar');
         if (!mount) return;
+        // 酒馆原生菜单条目结构（同"跳转楼层"等插件）：menu_button 自带
+        // width:min-content，放在抽屉里会被压成单字竖排，故不可用
+        const container = doc.createElement('div');
+        container.className = 'extension_container';
         const btn = doc.createElement('div');
         btn.id = 'eca-menu-btn';
-        btn.className = 'menu_button';
+        btn.className = 'list-group-item flex-container flexGap5';
         btn.title = '情绪头像管理';
-        const icon = doc.createElement('i');
-        icon.className = 'fa-solid fa-face-smile';
-        icon.setAttribute('aria-hidden', 'true');
+        const icon = doc.createElement('div');
+        icon.className = 'fa-solid fa-face-smile extensionsMenuExtensionButton';
+        const label = doc.createElement('span');
+        label.textContent = '情绪头像';
         btn.appendChild(icon);
-        btn.appendChild(doc.createTextNode(' 情绪头像'));
+        btn.appendChild(label);
         btn.addEventListener('click', openPanel);
-        mount.appendChild(btn);
+        container.appendChild(btn);
+        mount.appendChild(container);
     }
 
     function buildPanelSkeleton() {
@@ -633,6 +672,7 @@
         fileInputEl = doc.createElement('input');
         fileInputEl.type = 'file';
         fileInputEl.accept = 'image/*';
+        fileInputEl.multiple = true;
         fileInputEl.style.display = 'none';
         root.appendChild(fileInputEl);
         bindPanelEvents(root);
@@ -663,16 +703,45 @@
             }
         });
         fileInputEl.addEventListener('change', function () {
-            const file = fileInputEl.files && fileInputEl.files[0];
+            const files = fileInputEl.files ? Array.prototype.slice.call(fileInputEl.files) : [];
             const emotion = fileInputEl.dataset.emotion;
             fileInputEl.value = '';
-            if (!file || !emotion || !selectedCharacter) return;
-            uploadAvatarFile(selectedCharacter, emotion, file)
-                .then(function () {
-                    renderPanel();
-                    toast('已更新「' + selectedCharacter + '·' + emotion + '」');
-                })
-                .catch(function (e) { toast('上传失败：' + (e && e.message || e), true); });
+            if (!files.length || !emotion || !selectedCharacter) return;
+            // 单文件：归入所点格子的情绪（点格子选一张，意图明确）
+            if (files.length === 1) {
+                uploadAvatarFile(selectedCharacter, emotion, files[0])
+                    .then(function () {
+                        renderPanel();
+                        toast('已更新「' + selectedCharacter + '·' + emotion + '」');
+                    })
+                    .catch(function (e) { toast('上传失败：' + (e && e.message || e), true); });
+                return;
+            }
+            // 多文件：按文件名包含的情绪词自动匹配，未匹配的跳过
+            let done = 0;
+            let failed = 0;
+            const skipped = [];
+            const finish = function () {
+                renderPanel();
+                let msg = '已导入 ' + done + ' 张（' + selectedCharacter + '）';
+                if (failed) msg += '，失败 ' + failed + ' 张';
+                toast(msg, failed > 0);
+                if (skipped.length) {
+                    toast('未匹配到情绪词，已跳过：' + skipped.join('、'), true);
+                }
+            };
+            files.forEach(function (file) {
+                const matched = matchEmotionFromName(file.name);
+                if (!matched) { skipped.push(file.name); return; }
+                uploadAvatarFile(selectedCharacter, matched, file)
+                    .then(function () { done++; })
+                    .catch(function () { failed++; })
+                    .then(function () {
+                        if (done + failed + skipped.length === files.length) finish();
+                    });
+            });
+            // 全部文件都未匹配时没有异步任务，直接收尾
+            if (skipped.length === files.length) finish();
         });
         const enabledCb = root.querySelector('#eca-enabled');
         enabledCb.addEventListener('change', function () {
@@ -760,7 +829,7 @@
                 + '<div class="eca-detail-head"><b>' + escapeHtml(selectedCharacter) + '</b>'
                 + '<button class="eca-mini-btn" id="eca-batch-btn">批量导入大图</button>'
                 + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button></div>'
-                + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；十种情绪缺图时自动回落「默认」</div>'
+                + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；多选文件时按文件名自动匹配情绪；十种情绪缺图时自动回落「默认」</div>'
                 + '<div class="eca-grid">' + cells + '</div>';
         }
         syncPanelControls();
@@ -1224,6 +1293,7 @@
         removeCharacter: removeCharacter,
         renameCharacter: renameCharacter,
         uploadAvatarFile: uploadAvatarFile,
+        matchEmotionFromName: matchEmotionFromName,
         /* 面板桥 */
         openPanel: openPanel,
         closePanel: closePanel,

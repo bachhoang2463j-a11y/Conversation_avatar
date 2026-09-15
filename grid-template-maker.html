@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>头像网格模板生成器（1+9 表情表）</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; background: #141414; color: #eee; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p.hint { color: #aaa; font-size: 13px; line-height: 1.7; max-width: 900px; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 16px; }
+  .panel { background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 16px; width: 320px; }
+  .panel label { display: block; font-size: 13px; margin: 12px 0 4px; color: #bbb; }
+  .panel input[type="number"], .panel select { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #444; background: #111; color: #eee; }
+  .panel input[type="file"] { width: 100%; font-size: 13px; }
+  .row2 { display: flex; gap: 8px; }
+  .row2 > div { flex: 1; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  .primary { background: #ff00ff; color: #000; font-weight: 700; width: 100%; margin-top: 14px; }
+  .ghost { background: #333; color: #eee; width: 100%; margin-top: 8px; }
+  .stage { flex: 1; min-width: 320px; }
+  canvas { max-width: 100%; height: auto; border-radius: 8px; image-rendering: auto; background: #000; }
+  .map { margin-top: 12px; font-size: 13px; background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 12px 16px; max-width: 900px; }
+  .map ol { margin: 8px 0 0; padding-left: 20px; line-height: 1.8; }
+  .map b { color: #ff7bff; }
+  textarea { width: 100%; min-height: 300px; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 10px; font-size: 12.5px; line-height: 1.6; box-sizing: border-box; }
+  .promptBox { max-width: 900px; margin-top: 12px; background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 16px; }
+  code { background: #333; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>头像网格模板生成器：第一格锁定默认头像，其余 9 格留给 AI 画</h1>
+<p class="hint">
+  原理（备份 galgame 网格模板法的反向利用）：消费端只能等分切，生产端就让程序先画死几何形状，AI 只负责填色。<br>
+  本页用程序画一张 <code>品红 (#FF00FF)</code> 分隔线 + <code>纯绿 (#00FF00)</code> 空格子的模板，第一格嵌入你的 1:1 默认头像后导出 PNG。
+  发给 ChatGPT 生图时，几何精度由这张模板保证，AI 不再自己排版，也就不会再把每格压扁。<br>
+  导出图默认 <b>2 行 × 5 列 = 10 格</b>，正好对应情绪头像的 10 个情绪词（第 1 格=默认锁定，其余 9 格按顺序填）。
+</p>
+
+<div class="wrap">
+  <div class="panel">
+    <label>1. 上传 1:1 默认头像（放在第 1 格，锁定身份）</label>
+    <input type="file" id="avatar" accept="image/*">
+    <div class="row2">
+      <div><label>行数</label><input type="number" id="rows" value="2" min="1" max="5"></div>
+      <div><label>列数</label><input type="number" id="cols" value="5" min="1" max="6"></div>
+    </div>
+    <label>每格边长（px，1:1 正方形）</label>
+    <select id="cell">
+      <option value="256">256（快，草稿）</option>
+      <option value="512" selected>512（推荐）</option>
+      <option value="768">768（更细）</option>
+      <option value="1024">1024（慢，细节最多）</option>
+    </select>
+    <label>分隔线粗细（px，推荐 8，太细 AI 会无视）</label>
+    <input type="number" id="line" value="8" min="4" max="24">
+    <button class="primary" id="dl">下载模板 PNG</button>
+    <button class="ghost" id="redraw">重新预览</button>
+    <p class="hint" style="margin-top:12px">导出图不含任何文字水印：只有品红线 + 第1格照片 + 绿色空格，保证 AI 不会学出文字残留。格号→表情的对应关系看右侧/下方列表，写进提示词即可。</p>
+  </div>
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="map" id="map"></div>
+  </div>
+</div>
+
+<div class="promptBox">
+  <h1 style="font-size:16px">2. 发给 ChatGPT 的提示词（中文，直接复制）</h1>
+  <textarea id="prompt" readonly></textarea>
+  <button class="ghost" id="copy" style="width:auto">复制提示词</button>
+  <p class="hint">
+    用法：新建 ChatGPT 生图 → 上传上一步下载的模板 PNG → 粘贴提示词 → 生成。
+    回来的仍是一张同样大小的网格大图，再用「情绪头像」面板的 <b>批量导入大图（2×5）</b> 等分切开即可。
+    切片时每边往里收一点（约 2%），可以避开品红线残留；第 1 格是原图，可跳过不存。
+  </p>
+</div>
+
+<script>
+const EMOTIONS = ["默认","微笑","愤怒","悲伤","惊讶","轻蔑","杀意","思考","大笑","害羞"];
+const EMO_ZH = {
+  "默认": "自然中性表情，完全贴合原头像的神态 Hulk（本格为锁定基准，其他格向它看齐）",
+  "微笑": "自然轻微的笑意，嘴角微扬，眼神温和，不露齿或微露齿",
+  "愤怒": "压抑而严肃的愤怒，眉头紧锁、眼神锐利，但面部肌肉克制不扭曲",
+  "悲伤": "克制沉静的悲伤，眼睑微垂、嘴角下沉，疲惫内敛不哭喊",
+  "惊讶": "真实短暂的惊讶，眉眼微张、嘴微启，点到为止不瞪眼不张大嘴",
+  "轻蔑": "细微的不屑与冷淡，单侧嘴角轻扬，斜视带距离感",
+  "杀意": "危险冰冷、压迫感强，但表情依然克制：眼神冷、眉压低、下颌收紧，不做鬼脸",
+  "思考": "专注沉思、略带分析感，眼神侧视聚焦，可配手托下巴，眉眼内敛",
+  "大笑": "真实自然的开心大笑，眼睛眯起、露出牙齿，但禁止颜艺和五官扭曲",
+  "害羞": "克制自然的羞涩不自在，视线微垂、神情紧绷，禁止少女漫画式夸张"
+};
+
+let avatarImg = null;
+const $ = id => document.getElementById(id);
+
+$("avatar").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => { avatarImg = img; draw(); URL.revokeObjectURL(url); };
+  img.src = url;
+});
+["rows","cols","cell","line"].forEach(id => $(id).addEventListener("input", draw));
+$("redraw").onclick = draw;
+
+function draw() {
+  const rows = Math.min(5, Math.max(1, +$("rows").value || 2));
+  const cols = Math.min(6, Math.max(1, +$("cols").value || 5));
+  const cell = +$("cell").value || 512;
+  const line = +$("line").value || 8;
+  const MAG = "#FF00FF", GRN = "#00FF00";
+  const cv = $("cv");
+  cv.width = cols * cell + (cols + 1) * line;
+  cv.height = rows * cell + (rows + 1) * line;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = MAG;
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = line + c * (cell + line), y = line + r * (cell + line);
+      const idx = r * cols + c;
+      if (idx === 0 && avatarImg) {
+        // cover 填充：1:1 格，居中裁，不变形
+        const s = Math.max(cell / avatarImg.width, cell / avatarImg.height);
+        const dw = avatarImg.width * s, dh = avatarImg.height * s;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(x, y, cell, cell); ctx.clip();
+        ctx.fillStyle = "#000"; ctx.fillRect(x, y, cell, cell);
+        ctx.drawImage(avatarImg, x + (cell - dw) / 2, y + (cell - dh) / 2, dw, dh);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = GRN;
+        ctx.fillRect(x, y, cell, cell);
+      }
+    }
+  }
+  renderMap(rows, cols);
+  renderPrompt(rows, cols);
+}
+
+function renderMap(rows, cols) {
+  const n = rows * cols;
+  let html = `<b>格号 → 表情映射（从左到右、从上到下）：</b><ol>`;
+  for (let i = 0; i < n; i++) {
+    const emo = EMOTIONS[i] || ("空格" + (i + 1));
+    html += `<li>第 ${i + 1} 格 → ${emo}${i === 0 ? "（已嵌入你的默认头像，锁定）" : ""}</li>`;
+  }
+  html += `</ol><span style="color:#888">批量导入时用同样的 ${rows} 行 × ${cols} 列等分切，第 1 格可跳过（已有原图）。</span>`;
+  $("map").innerHTML = html;
+}
+
+function renderPrompt(rows, cols) {
+  const n = rows * cols;
+  const lines = [];
+  for (let i = 1; i < n; i++) {
+    const emo = EMOTIONS[i] || ("额外表情" + (i + 1));
+    const zh = EMO_ZH[emo] || emo;
+    const r = Math.floor(i / cols) + 1, c = (i % cols) + 1;
+    lines.push(`- 第 ${i + 1} 格（第 ${r} 行第 ${c} 列）=${emo}：${zh}`);
+  }
+  $("prompt").value =
+`请编辑我上传的这张网格模板图。它是 ${rows} 行 × ${cols} 列、共 ${n} 个正方形格子，格子之间是品红色（#FF00FF）分隔线，空格子是纯绿色（#00FF00）背景，第 1 格是锁定的真人照片。
+
+【几何铁律，必须遵守】
+1. 所有品红网格线保持原位、原粗细、横平竖直，不准移动、弯曲、擦除、变细或重画。
+2. 任何脸、头、肩膀、背景都不准压线、串格，每个格子完全独立。
+3. 只返回一张图，像素尺寸和网格布局与原图完全一致，不准拆成多张、不准增减行列。
+4. 格内不准出现任何文字、数字、水印、logo，不准在格内加边框线。
+
+【身份铁律，必须遵守】
+5. 第 1 格（第 1 行第 1 列、左上角）是锁定的身份基准，不准重画、不准美化。其他格必须是同一个人：同一张脸、同一个发型、同一套服装、同一个配饰，头肩构图、人物大小、视角尽量统一，每张脸完整收在自己格内。
+6. 没有上传头像时，严格按我给的角色描述，从第 1 格开始先定下这个人，后面 9 格向他看齐。
+7. 每个填充格的绿色必须盖干净，每个格子内的背景与第一张图统一。
+
+【表演风格，最高优先级】
+8. 严肃正剧、电影级角色表演风格：10 个头像要像同一次专业角色定妆摄影里抓到的不同表演瞬间，而不是 10 个不同版本的人。
+9. 情绪只通过真实、克制、自然的眼神、眉眼、嘴角和面部肌肉变化表现。禁止颜艺、鬼脸、夸张漫画表情、过度张嘴、眼睛异常睁大、五官扭曲、卡通化、搞怪表情。
+10. 即使是愤怒、杀意、大笑这种强烈情绪，也必须保持真实、成熟、克制，符合正剧影视表演的分寸。
+11. 不准因为换情绪就改脸型、年龄、发型、服装、身体比例或角色气质。
+12. 一致性优先级：角色身份一致 > 服装外观一致 > 构图一致 > 情绪差异。
+
+【10 格表情顺序】
+${lines.join("\n")}
+
+画风：超写实人像摄影，皮肤质感，电影感对比，每格 1:1 正方形构图。`;
+}
+
+$("dl").onclick = () => {
+  draw();
+  const a = document.createElement("a");
+  const rows = $("rows").value, cols = $("cols").value, cell = $("cell").value;
+  a.download = `avatar-grid-template-${rows}x${cols}-${cell}px.png`;
+  a.href = $("cv").toDataURL("image/png");
+  a.click();
+};
+$("copy").onclick = async () => {
+  $("prompt").select();
+  try { await navigator.clipboard.writeText($("prompt").value); $("copy").textContent = "已复制"; }
+  catch (e) { document.execCommand("copy"); $("copy").textContent = "已选中，请 Ctrl+C"; }
+  setTimeout(() => $("copy").textContent = "复制提示词", 1500);
+};
+
+draw();
+</script>
+</body>
+</html>

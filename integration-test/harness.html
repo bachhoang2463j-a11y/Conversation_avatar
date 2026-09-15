@@ -30,7 +30,7 @@
   #log { font-size: 11px; color: #888; max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: Consolas, monospace; border: 1px solid #2a2e36; padding: 4px; }
   /* 假魔法棒菜单容器 */
   #extensionsMenu { position: fixed; top: 8px; left: 8px; z-index: 5; display: flex; gap: 6px; }
-  #extensionsMenu .menu_button { background: #2d5f8a; color: #fff; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; user-select: none; }
+  #extensionsMenu .list-group-item { background: #2d5f8a; color: #fff; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; user-select: none; display: flex; align-items: center; gap: 6px; }
 </style>
 </head>
 <body>
@@ -271,6 +271,54 @@ test('M1-10 重扫幂等', function () {
   assert(n1 === 2, '首次替换数量错误：' + n1);
   assert(n2 === 2, '重扫产生重复：' + n2);
 });
+test('M1-11 段首头像两列布局（纯样式，渲染逻辑不变）', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>{弗兰克(微笑)}他咧嘴一笑，端起了枪。</p><p>无标签的普通段落。</p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('p');
+  var p1 = ps[0];
+  var p2 = ps[1];
+  var img = p1.querySelector('img.eca-avatar');
+  assert(img, '未渲染头像');
+  var cs1 = getComputedStyle(p1);
+  assert(cs1.position === 'relative', '带头像段落应为 relative：' + cs1.position);
+  var pl = parseFloat(cs1.paddingLeft);
+  assert(pl > 43 && pl < 47, '左列应为 方形容+.3em（约44.8px），实际 ' + pl);
+  assert(getComputedStyle(img).position === 'absolute', '头像应绝对定位到左列');
+  assert(parseFloat(getComputedStyle(img).width) === 40, '列内头像应填满方形容（40px），实际 ' + getComputedStyle(img).width);
+  var rect = img.getBoundingClientRect();
+  var pRect = p1.getBoundingClientRect();
+  assert(Math.abs(rect.left - pRect.left) < 1, '头像应贴住段落左缘');
+  assert(rect.right <= pRect.left + pl + 1, '头像不应超出左列：right=' + rect.right + ' colEnd=' + (pRect.left + pl));
+  // 简单段落文字垂直居中
+  assert(cs1.display === 'flex' && cs1.alignItems === 'center', '简单段落应 flex 垂直居中：' + cs1.display + '/' + cs1.alignItems);
+  var tnode = Array.from(p1.childNodes).filter(function (n) { return n.nodeType === 3 && n.textContent.trim(); })[0];
+  var rng = document.createRange();
+  rng.selectNodeContents(tnode);
+  var tRect = rng.getBoundingClientRect();
+  var tCenter = (tRect.top + tRect.bottom) / 2, pCenter = (pRect.top + pRect.bottom) / 2;
+  assert(Math.abs(tCenter - pCenter) < 2, '文字未垂直居中：偏差 ' + (tCenter - pCenter) + 'px');
+  // 含内联元素的段落同样 flex 居中：连续文本与 <em>/<q> 等行内元素合并为
+  // 单个匿名 flex 项，不拆行。回归锁：酒馆引号美化把台词包成 <q>，曾使
+  // "简单段落"判定失效导致全部对话段落顶对齐（居中从未生效）。
+  var mes2 = __addFloor('<p>{弗兰克(微笑)}“嗯。”<em>他强调道</em>，随后离开。</p>', false);
+  var mes3 = __addFloor('<p>{弗兰克(微笑)}<q>“看不见的敌人？”</q>他咧嘴一笑。</p>', false);
+  window.EmoAvatar.scanAll();
+  var p3 = mes2.querySelector('p');
+  var cs3 = getComputedStyle(p3);
+  assert(cs3.display === 'flex' && cs3.alignItems === 'center', '含 <em> 段落应 flex 居中：' + cs3.display + '/' + cs3.alignItems);
+  var p4 = mes3.querySelector('p');
+  var cs4 = getComputedStyle(p4);
+  assert(cs4.display === 'flex' && cs4.alignItems === 'center', '含 <q> 段落应 flex 居中（真实缺陷回归锁）：' + cs4.display + '/' + cs4.alignItems);
+  var qEl = p4.querySelector('q');
+  var imgEl = p4.querySelector('img.eca-avatar');
+  var qRect = qEl.getBoundingClientRect(), aRect = imgEl.getBoundingClientRect(), p4Rect = p4.getBoundingClientRect();
+  assert(Math.abs((qRect.top + qRect.height / 2) - (aRect.top + aRect.height / 2)) < 2, '<q> 文本未与头像垂直居中');
+  assert(qRect.left >= p4Rect.left + parseFloat(cs4.paddingLeft) - 1, '文本应从右列开始');
+  var cs2 = getComputedStyle(p2);
+  assert(cs2.position === 'static', '无头像段落不应改变定位：' + cs2.position);
+  assert(parseFloat(cs2.paddingLeft) === 0, '无头像段落不应有左内边距：' + cs2.paddingLeft);
+});
 
 /* ---------- M2 用例：提示词注入 ---------- */
 function __lastInject() {
@@ -388,10 +436,17 @@ test('M3-3 删除单张清理缓存', function () {
 });
 
 /* ---------- M4 用例：管理面板 ---------- */
-test('M4-1 魔法棒菜单入口已注入', function () {
+test('M4-1 魔法棒菜单入口已注入（原生条目结构）', function () {
   var btn = document.getElementById('eca-menu-btn');
   assert(btn, '未找到菜单按钮');
-  assert(document.getElementById('extensionsMenu').contains(btn), '按钮不在 extensionsMenu 内');
+  var menu = document.getElementById('extensionsMenu');
+  assert(menu.contains(btn), '按钮不在 extensionsMenu 内');
+  var wrap = btn.closest('.extension_container');
+  assert(wrap && menu.contains(wrap), '缺少 .extension_container 包裹层');
+  assert(btn.classList.contains('list-group-item'), '应使用酒馆原生条目类 list-group-item');
+  assert(btn.querySelector('.extensionsMenuExtensionButton'), '缺少原生图标类 extensionsMenuExtensionButton');
+  var label = btn.querySelector('span');
+  assert(label && label.textContent === '情绪头像', '文字标签结构错误');
 });
 test('M4-2 面板打开/关闭与角色列表渲染', function () {
   window.EmoAvatar.setCharactersPersist(['弗兰克', '罗兰']);
@@ -489,6 +544,41 @@ test('M4-8 改名迁移素材键', function () {
   }).then(function (records) {
     assert(records.some(function (r) { return r.id === '新名侠_微笑'; }), '素材键未迁移');
     assert(!records.some(function (r) { return r.character === '旧名侠'; }), '旧键残留');
+  });
+});
+test('M4-9 文件名匹配情绪词', function () {
+  var m = window.EmoAvatar.matchEmotionFromName;
+  assert(typeof m === 'function', '调试桥缺少 matchEmotionFromName');
+  assert(m('微笑.png') === '微笑', '简单文件名匹配失败');
+  assert(m('弗兰克-愤怒(2).png') === '愤怒', '带序号文件名匹配失败');
+  assert(m('20260916_害羞.png') === '害羞', '带前缀文件名匹配失败');
+  assert(m('photo.png') === null, '无情绪词应返回 null');
+  assert(m('') === null, '空文件名应返回 null');
+  assert(m('微笑和悲伤.png') === '微笑', '多命中应取最先出现者');
+});
+test('M4-10 多选导入按文件名自动匹配', function () {
+  window.EmoAvatar.setCharactersPersist(['多选侠']);
+  window.EmoAvatar.openPanel();
+  var input = document.querySelector('#eca-panel input[type=file]');
+  assert(input, '面板缺少文件输入');
+  assert(input.multiple === true, '文件输入未开启 multiple');
+  if (typeof DataTransfer !== 'function') return '环境无 DataTransfer，跳过多选模拟';
+  return __canvasBlob(50, 'a').then(function (blob) {
+    var dt = new DataTransfer();
+    dt.items.add(new File([blob], '多选侠-微笑.png', { type: 'image/png' }));
+    dt.items.add(new File([blob], '随便什么(1).png', { type: 'image/png' }));
+    dt.items.add(new File([blob], '惊讶.jpg', { type: 'image/png' }));
+    input.files = dt.files;
+    input.dataset.emotion = '默认';
+    input.dispatchEvent(new Event('change'));
+    return __wait(800);
+  }).then(function () {
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    var ids = records.filter(function (r) { return r.character === '多选侠'; }).map(function (r) { return r.emotion; });
+    assert(ids.indexOf('微笑') !== -1, '微笑未入库：' + ids.join(','));
+    assert(ids.indexOf('惊讶') !== -1, '惊讶未入库：' + ids.join(','));
+    assert(ids.indexOf('默认') === -1, '未匹配文件不应归入所点格子情绪：' + ids.join(','));
   });
 });
 
