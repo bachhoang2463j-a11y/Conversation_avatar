@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.0';
+    const VERSION = '0.2.1';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -63,7 +63,7 @@
     // groups: [{id, name, enabled, members:[角色名]}]；characters 为拍平索引（isRegistered 等零改动）
     // 组开关只控制提示词注入（角色卡切换用），不影响已渲染头像与素材库
     // ============================================
-    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1' };
+    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1', topAlign: false };
     let characters = [];
     let groups = [];
     let groupSeq = 1;
@@ -163,12 +163,13 @@
         + '.eca-avatar.eca-placeholder::after{content:"?";'
         + 'font-size:calc(var(--eca-size,2.5em)*.5);}'
         // 方案一：精装书志 · 典雅文学风
-        // 段首头像两列布局：align-items: flex-start + margin-top: 0.18em 首行文字光学绝对平齐，
-        // 彻底解决多行台词导致头像浮空中部的问题；双层装裱微边框与纸面微投影完美契合；
-        // 结合 2px 暖咖色左侧引言呼吸线，普通叙述旁白适度微退，形成清晰典雅的阅读层次
-        + '.mes_text p.eca-p{display:flex;align-items:flex-start;gap:.75em;margin:1.25em 0;}'
+        // 段首头像两列布局：默认 align-items: center 全行强制垂直居中（单行/多行一致）；
+        // 置顶开关打开时由 #eca-align-style 覆盖为 flex-start + 头像 margin-top:.18em 首行平齐。
+        // 多行台词下头像悬于段中的外观是已知取舍；结合 2px 暖咖色左侧引言呼吸线，
+        // 普通叙述旁白适度微退，形成清晰典雅的阅读层次
+        + '.mes_text p.eca-p{display:flex;align-items:center;gap:.75em;margin:1.25em 0;}'
         + '.mes_text p.eca-p > .eca-avatar:first-child{flex:0 0 auto;'
-        + 'width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);max-width:none;margin:.18em 0 0;'
+        + 'width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);max-width:none;margin:0;'
         + 'border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.25);object-fit:cover;}'
         + '.mes_text p.eca-p > .eca-text{flex:1 1 auto;min-width:0;line-height:1.85;'
         + 'border-left:2px solid rgba(140,105,65,.32);padding-left:.65em;}'
@@ -304,8 +305,8 @@
     /**
      * 段首头像两列化：p 的首个子节点是头像时，把头像后的全部兄弟内容
      * （文本、<q>、<em> 等）包进单个 .eca-text，使段落成为
-     * 「头像 + 文字块」两个 flex 项（配合 p.eca-p 样式），
-     * 单行/多行文字都垂直居中且内部行内流不变。
+     * 「头像 + 文字块」两个 flex 项（配合 p.eca-p 样式，默认垂直居中），
+     * 文字块内部行内流不变，<q>/<em> 不会被拆成并排 flex 项压扁。
      * 幂等：已处理（.eca-p）或头像后无内容则跳过
      */
     function wrapLeadingAvatarParagraphs() {
@@ -473,6 +474,30 @@
         }
     }
 
+    /** 对齐模式即时生效：置顶开 = 覆盖为顶端首行平齐；关 = 移除覆盖回到默认垂直居中 */
+    function applyAlignMode() {
+        let el = doc.getElementById('eca-align-style');
+        if (!settings.topAlign) {
+            if (el) el.textContent = '';
+            return;
+        }
+        if (!el) {
+            el = doc.createElement('style');
+            el.id = 'eca-align-style';
+            doc.head.appendChild(el);
+        }
+        el.textContent = '.mes_text p.eca-p{align-items:flex-start !important;}'
+            + '.mes_text p.eca-p > .eca-avatar:first-child{margin:.18em 0 0 !important;}';
+    }
+
+    /** 置顶开关：开 = 段首头像与文字首行平齐；关（默认）= 全行强制垂直居中 */
+    function setTopAlign(topAlign) {
+        settings.topAlign = !!topAlign;
+        persistSettings();
+        applyAlignMode();
+        syncPanelControls();
+    }
+
     // ============================================
     // IndexedDB 存储层（M3）：主键 `角色名_情绪`，全局角色库（不绑角色卡）
     // ============================================
@@ -630,6 +655,7 @@
         + '#eca-panel .eca-char-del:hover{color:#943325;background:rgba(148,51,37,.12);opacity:1;}'
         // 底栏常驻按键区
         + '#eca-panel .eca-footer-actions{display:flex;align-items:center;gap:8px;margin-left:18px;}'
+        + '#eca-panel .eca-footer-actions .eca-switch{white-space:nowrap;}'
         + '#eca-panel .eca-add{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;text-shadow:0 1px 0 rgba(255,255,255,.7);user-select:none;white-space:nowrap;}'
         + '#eca-panel .eca-add.eca-add-char{background:linear-gradient(180deg,#fefaf0 0%,#ebe0c8 100%);border:1px solid #c3984d;color:#2b1f13;box-shadow:0 1px 3px rgba(110,75,30,.15),inset 0 1px 0 #fff;}'
         + '#eca-panel .eca-add.eca-add-char:hover{background:linear-gradient(180deg,#fffdf8 0%,#f4e8d0 100%);border-color:#9c7138;transform:translateY(-1px);box-shadow:0 2px 6px rgba(156,113,56,.25);}'
@@ -655,7 +681,7 @@
         + '#eca-panel .eca-char-item[draggable]{cursor:grab;}'
         + '#eca-panel .eca-char-item.eca-dragging{opacity:.35;}'
         // 右侧详情区
-        + '#eca-panel .eca-detail{flex:1 1 auto;padding:16px 20px;overflow-y:auto;display:flex;flex-direction:column;min-height:0;}'
+        + '#eca-panel .eca-detail{flex:1 1 auto;min-width:0;padding:16px 20px;overflow-y:auto;display:flex;flex-direction:column;min-height:0;}'
         + '#eca-panel .eca-detail-empty{color:#7d6b56;padding:40px 0;text-align:center;font-size:13px;}'
         + '#eca-panel .eca-detail-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;padding-bottom:10px;border-bottom:1px solid #ded2bd;flex:0 0 auto;}'
         + '#eca-panel .eca-detail-head b{font-size:18px;font-family:"Cinzel","STSong","Songti SC","Noto Serif SC",serif;color:#2b1f13;letter-spacing:.02em;}'
@@ -672,7 +698,8 @@
         + '#eca-panel .eca-cell-img img{width:100%;height:100%;object-fit:cover;border-radius:5px;border:1px solid rgba(160,130,90,.25);box-shadow:0 1px 3px rgba(60,40,20,.1);display:block;}'
         + '#eca-panel .eca-cell-empty{width:100%;height:100%;border:1px dashed #b8a584;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#7d6b56;font-size:12px;font-family:"Cinzel","STSong","Songti SC",serif;background:rgba(240,230,210,.25);transition:all .15s ease;}'
         + '#eca-panel .eca-cell:hover .eca-cell-empty{border-color:#9c7138;color:#9c7138;background:rgba(195,152,77,.1);}'
-        + '#eca-panel .eca-cell-name{font-size:12px;font-weight:600;color:#493725;font-family:"Cinzel","STSong","Songti SC",serif;line-height:1.2;padding-top:2px;}'
+        // 情绪名不允许竖排压字：窄宽下省略而非逐字换行
+        + '#eca-panel .eca-cell-name{font-size:12px;font-weight:600;color:#493725;font-family:"Cinzel","STSong","Songti SC",serif;line-height:1.2;padding-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}'
         // 自定义情绪格删除钮与「＋新增情绪」格
         + '#eca-panel .eca-cell-del{position:absolute;top:3px;right:3px;z-index:2;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;border:0;background:rgba(148,51,37,.85);color:#fff;font-size:10px;cursor:pointer;opacity:0;transition:opacity .15s ease;padding:0;}'
         + '#eca-panel .eca-cell:hover .eca-cell-del{opacity:1;}'
@@ -716,7 +743,20 @@
         + '#eca-panel ::-webkit-scrollbar,#eca-batch-panel ::-webkit-scrollbar{width:6px;height:6px;}'
         + '#eca-panel ::-webkit-scrollbar-track,#eca-batch-panel ::-webkit-scrollbar-track{background:rgba(220,205,180,.3);border-radius:3px;}'
         + '#eca-panel ::-webkit-scrollbar-thumb,#eca-batch-panel ::-webkit-scrollbar-thumb{background:#cfbea0;border-radius:3px;}'
-        + '#eca-panel ::-webkit-scrollbar-thumb:hover,#eca-batch-panel ::-webkit-scrollbar-thumb:hover{background:#b5a281;}';
+        + '#eca-panel ::-webkit-scrollbar-thumb:hover,#eca-batch-panel ::-webkit-scrollbar-thumb:hover{background:#b5a281;}'
+        // 移动端窄屏：纵向堆叠 + 网格降列 + 底栏收紧，避免左右挤压与竖排单字
+        + '@media (max-width:640px){'
+        + '#eca-panel .eca-modal{width:min(820px,96vw);max-height:92vh;}'
+        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:calc(92vh - 110px);}'
+        + '#eca-panel .eca-side{width:auto;flex:0 0 auto;border-right:0;border-bottom:1px solid #ded2bd;max-height:32vh;}'
+        + '#eca-panel .eca-detail{padding:12px;}'
+        + '#eca-panel .eca-grid{grid-template-columns:repeat(3,1fr);gap:8px;}'
+        + '#eca-panel .eca-cell-name{font-size:11px;}'
+        + '#eca-panel .eca-footer{gap:10px;padding:10px 12px;}'
+        + '#eca-panel .eca-footer-actions{margin-left:0;flex-wrap:wrap;}'
+        + '#eca-panel .eca-size input[type=range]{width:90px;}'
+        + '#eca-panel .eca-size-preview{margin-left:0;width:100%;justify-content:flex-end;}'
+        + '}';
 
     function ensurePanelStyles() {
         if (doc.getElementById('eca-panel-styles')) return;
@@ -978,6 +1018,7 @@
             + '    <div class="eca-footer-actions">'
             + '      <button class="eca-add eca-add-char" id="eca-add-char">＋ 新增角色</button>'
             + '      <button class="eca-add eca-add-group" id="eca-add-group">＋ 新增分组</button>'
+            + '      <label class="eca-switch" title="勾选切为顶端首行平齐，不勾选为垂直居中"><input type="checkbox" id="eca-top-align"> 置顶</label>'
             + '    </div>'
             + '    <div class="eca-size-preview" id="eca-size-preview"></div>'
             + '  </div>'
@@ -1144,6 +1185,11 @@
             syncPanelControls();
             updateSizePreview();
         });
+        const topAlignCb = root.querySelector('#eca-top-align');
+        topAlignCb.addEventListener('change', function () {
+            setTopAlign(topAlignCb.checked);
+            toast(topAlignCb.checked ? '已切换为顶端首行平齐' : '已切换为垂直居中');
+        });
     }
 
     function buildSizePreviewEl() {
@@ -1179,6 +1225,8 @@
         if (!panelEl) return;
         const cb = panelEl.querySelector('#eca-enabled');
         if (cb) cb.checked = settings.enabled;
+        const topAlignCb = panelEl.querySelector('#eca-top-align');
+        if (topAlignCb) topAlignCb.checked = !!settings.topAlign;
         const range = panelEl.querySelector('#eca-size-range');
         if (range) range.value = String(settings.size);
         const val = panelEl.querySelector('#eca-size-val');
@@ -1784,6 +1832,7 @@
         getCharacters() { return characters.slice(); },
         setEnabled: setEnabled,
         setSize: setSize,
+        setTopAlign: setTopAlign,
         scanAll: scanAll,
         applyInjection: applyInjection,
         /* 存储层桥（面板与 harness 共用） */
@@ -1841,6 +1890,7 @@
         loadState();
         injectStyles();
         applySizeVar();
+        applyAlignMode();
         addMenuButton();
         hookEvents();
         applyInjection();

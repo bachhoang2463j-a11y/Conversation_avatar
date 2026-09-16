@@ -59,6 +59,8 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 头像显示大小：面板底部滑条（1.5–5em），即时生效，已渲染楼层无需重扫。
 
+段首头像默认与整段文字**垂直居中**；面板底栏「＋ 新增分组」右侧有「置顶」开关，勾选即切为顶端首行平齐，状态持久化。窄屏（≤640px）下面板自动纵向堆叠、情绪网格降为 3 列、底栏收紧，情绪名省略不竖排。
+
 ## 已知限制
 
 - **TTS 会朗读标签原文**（酒馆 TTS 读消息原文，插件无法拦截）
@@ -81,6 +83,6 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 开发与测试
 
-- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），54 个用例覆盖渲染、容错、两列布局、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
+- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），56 个用例覆盖渲染、容错、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
 - 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行）
 - `node --check emotion-avatar.js` 语法校验

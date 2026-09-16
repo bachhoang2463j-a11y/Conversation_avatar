@@ -159,7 +159,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.0', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.1', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -271,8 +271,9 @@ test('M1-10 重扫幂等', function () {
   assert(n1 === 2, '首次替换数量错误：' + n1);
   assert(n2 === 2, '重扫产生重复：' + n2);
 });
-test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）', function () {
+test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块，默认垂直居中）', function () {
   __resetChat(); __seedM1();
+  window.EmoAvatar.setTopAlign(false);
   var mes = __addFloor('<p>{弗兰克(微笑)}他咧嘴一笑，端起了枪。</p><p>无标签的普通段落。</p>', false);
   window.EmoAvatar.scanAll();
   var ps = mes.querySelectorAll('p');
@@ -283,30 +284,28 @@ test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）'
   // p.eca-p flex 行：头像 + 单个 .eca-text 文字块，两个 flex 项
   assert(p1.classList.contains('eca-p'), '段首头像段落应加 .eca-p 类');
   var cs1 = getComputedStyle(p1);
-  assert(cs1.display === 'flex' && cs1.alignItems === 'flex-start', '应为 flex 行且顶端对齐：' + cs1.display + '/' + cs1.alignItems);
+  assert(cs1.display === 'flex' && cs1.alignItems === 'center', '默认应为 flex 行且垂直居中：' + cs1.display + '/' + cs1.alignItems);
   var txt1 = p1.querySelector(':scope > .eca-text');
   assert(txt1, '头像后的内容应包进 .eca-text');
   assert(p1.children.length === 2, 'p 应只有头像+文字块两个子元素，实际 ' + p1.children.length);
   assert(txt1.textContent.indexOf('端起了枪') !== -1, '文字内容丢失');
   var tr1 = txt1.getBoundingClientRect(), ar1 = img.getBoundingClientRect();
-  assert(Math.abs(tr1.top - ar1.top) < 10,
-    '文字块顶端应与头像顶端光学对齐：偏差 ' + (tr1.top - ar1.top) + 'px');
+  assert(Math.abs((tr1.top + tr1.bottom) / 2 - (ar1.top + ar1.bottom) / 2) < 12,
+    '文字块中心应与头像中心垂直居中：偏差 ' + ((tr1.top + tr1.bottom) / 2 - (ar1.top + ar1.bottom) / 2) + 'px');
   assert(tr1.left >= ar1.right - 1, '文字块应在头像右侧');
-  // 方案一：精装书志（首行光学平齐，多行台词不浮空）
+  // 强制垂直居中：<q>/<em> 必须包进文字块内部，不被拆成并排 flex 项压扁
   var mes2 = __addFloor('<p>{弗兰克(微笑)}“嗯。”<em>他强调道</em>，随后离开。</p>', false);
   var mes3 = __addFloor('<p>{弗兰克(微笑)}<q>“看不见的敌人？”</q>他咧嘴一笑，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲，那笑容里带着一股嗜血的狠劲。</p>', false);
   window.EmoAvatar.scanAll();
   [mes2.querySelector('p'), mes3.querySelector('p')].forEach(function (pp, i) {
     assert(pp.classList.contains('eca-p'), '段落' + i + ' 应为 .eca-p');
+    assert(getComputedStyle(pp).alignItems === 'center', '段落' + i + ' 默认应垂直居中');
     var txtx = pp.querySelector(':scope > .eca-text');
     assert(txtx, '段落' + i + ' 缺 .eca-text 包裹');
     var qEl = txtx.querySelector('q');
     var emEl = txtx.querySelector('em');
     assert(qEl || emEl || i === 0, '段落' + i + ' 的 <q>/<em> 应在文字块内部');
-    var imgx = pp.querySelector('img.eca-avatar');
-    var ax = imgx.getBoundingClientRect(), tx = txtx.getBoundingClientRect();
-    assert(Math.abs(tx.top - ax.top) < 10,
-      '段落' + i + ' 文字块未与头像顶端对齐：偏差 ' + (tx.top - ax.top) + 'px');
+    assert(pp.children.length === 2, '段落' + i + ' 应只有头像+文字块两个子元素');
   });
   // 长段落：文字块内部正常折行（多行），占满右列，不被横向压扁
   var p4 = mes3.querySelector('p');
@@ -323,6 +322,40 @@ test('M1-11 段首头像两列布局（.eca-p flex 行 + .eca-text 文字块）'
   assert(p4.querySelectorAll('.eca-text').length === 1, '重复扫描产生嵌套包裹');
   var cs2 = getComputedStyle(p2);
   assert(cs2.display !== 'flex' && !p2.classList.contains('eca-p'), '无头像段落不应被改造');
+  window.EmoAvatar.setTopAlign(false);
+});
+test('M1-12 置顶开关：默认居中，打开切顶对齐且持久化', function () {
+  __resetChat(); __seedM1();
+  window.EmoAvatar.setTopAlign(false);
+  var mes = __addFloor('<p>{弗兰克(微笑)}他咧嘴一笑。</p>', false);
+  window.EmoAvatar.scanAll();
+  var p = mes.querySelector('p');
+  assert(p.classList.contains('eca-p'), '应为 .eca-p');
+  assert(getComputedStyle(p).alignItems === 'center', '默认应垂直居中');
+  window.EmoAvatar.setTopAlign(true);
+  window.EmoAvatar.scanAll();
+  assert(getComputedStyle(p).alignItems === 'flex-start', '置顶开应切为顶端对齐');
+  var stored = JSON.parse(localStorage.getItem('emoavatar_settings'));
+  assert(stored && stored.topAlign === true, '置顶状态应持久化到 emoavatar_settings');
+  window.EmoAvatar.setTopAlign(false);
+  window.EmoAvatar.scanAll();
+  assert(getComputedStyle(p).alignItems === 'center', '置顶关应恢复垂直居中');
+  // 面板开关存在且与状态同步
+  window.EmoAvatar.openPanel();
+  var cb = document.getElementById('eca-top-align');
+  assert(cb, '面板底栏缺少 #eca-top-align 开关');
+  assert(cb.checked === false, '开关回填应与状态一致');
+  assert(cb.closest('.eca-footer-actions'), '开关应在新增分组右侧的 .eca-footer-actions 内');
+  window.EmoAvatar.closePanel();
+});
+test('M4-11 移动端 CSS：窄屏不断竖排、不挤压', function () {
+  var style = document.getElementById('eca-panel-styles');
+  assert(style, '缺少 #eca-panel-styles');
+  var css = style.textContent;
+  assert(css.indexOf('@media') !== -1, '缺少移动端 @media 适配');
+  assert(css.indexOf('repeat(3,1fr)') !== -1, '窄屏情绪网格应降为 3 列');
+  assert(css.indexOf('flex-direction:column') !== -1, '窄屏面板主体应纵向堆叠');
+  assert(css.indexOf('white-space:nowrap') !== -1, '情绪名/开关应防竖排压字');
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */
