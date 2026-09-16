@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.2';
+    const VERSION = '0.2.3';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -647,10 +647,12 @@
     // 管理面板（M4）：魔法棒菜单入口 + 单弹窗
     // ============================================
     const PANEL_CSS = ''
-        // 两个弹窗（管理面板 / 批量导入）共用的羊皮纸骨架样式
-        + '#eca-panel,#eca-batch-panel{display:none;position:fixed;inset:0;z-index:99999;background:rgba(18,13,8,.65);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);align-items:center;justify-content:center;font-size:13px;font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}'
+        // 两个弹窗（管理面板 / 批量导入）共用的羊皮纸骨架样式。
+        // 遮罩用 absolute 而非 fixed：酒馆移动端 html 为高度 0 的变换元素，
+        // fixed 会以它为基准被压成一条；absolute 跟随 body（top/left 0 宽视口）即可全屏。
+        + '#eca-panel,#eca-batch-panel{display:none;position:absolute;top:0;left:0;width:100%;min-height:100%;z-index:99999;background:rgba(18,13,8,.65);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);align-items:flex-start;justify-content:center;padding:4vh 0;box-sizing:border-box;font-size:13px;font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}'
         + '#eca-batch-panel{z-index:100001;background:rgba(18,13,8,.7);}'
-        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee 0%,#f4eddc 45%,#ecdfc7 100%);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45),0 0 0 1px rgba(160,130,90,.25);position:relative;overflow:hidden;}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,94vw);max-height:none;display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee 0%,#f4eddc 45%,#ecdfc7 100%);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45),0 0 0 1px rgba(160,130,90,.25);position:relative;overflow:hidden;flex:0 0 auto;}'
         + '#eca-panel .eca-modal::before,#eca-batch-panel .eca-modal::before{content:"";position:absolute;inset:3px;border:1px solid #ded2bd;border-radius:9px;pointer-events:none;box-shadow:inset 0 0 16px rgba(150,115,75,.1);}'
         + '#eca-batch-panel .eca-modal{width:min(880px,94vw);max-height:90vh;}'
         + '#eca-panel .eca-header,#eca-batch-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;border-bottom:1px solid #ded2bd;background:rgba(246,238,222,.7);position:relative;z-index:2;font-weight:700;color:#2b1f13;font-family:"Cinzel","STSong","Songti SC","Noto Serif SC",Georgia,serif;font-size:15px;letter-spacing:.02em;}'
@@ -658,7 +660,7 @@
         + '#eca-panel .eca-close:hover,#eca-batch-panel .eca-close:hover{color:#943325;background:rgba(148,51,37,.1);border-color:rgba(148,51,37,.25);}'
         + '#eca-panel .eca-footer,#eca-batch-panel .eca-footer{display:flex;align-items:center;gap:16px;padding:10px 18px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);flex-wrap:wrap;position:relative;z-index:2;font-size:13px;}'
         // 管理面板主体
-        + '#eca-panel .eca-body{display:flex;min-height:360px;max-height:calc(88vh - 100px);overflow:hidden;position:relative;z-index:1;}'
+        + '#eca-panel .eca-body{display:flex;min-height:360px;max-height:calc(100vh - 220px);max-height:calc(100dvh - 220px);overflow:hidden;position:relative;z-index:1;}'
         + '#eca-panel .eca-side{width:210px;flex:0 0 210px;border-right:1px solid #ded2bd;background:rgba(244,235,218,.55);padding:10px 10px 8px;display:flex;flex-direction:column;gap:6px;min-height:0;}'
         + '#eca-panel .eca-side-title{color:#2b1f13;font-size:12px;font-weight:700;font-family:"Cinzel","STSong","Songti SC","Noto Serif SC",serif;padding:0 2px 4px;border-bottom:1px solid rgba(205,190,162,.45);}'
         + '#eca-panel #eca-char-list{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;}'
@@ -763,10 +765,8 @@
         // 移动端窄屏：纵向堆叠 + 网格降列 + 底栏收紧，避免左右挤压与竖排单字；
         // 遮罩顶部对齐 + 头栏粘顶，保证窄屏下关闭按钮始终可达
         + '@media (max-width:640px){'
-        + '#eca-panel,#eca-batch-panel{align-items:flex-start;padding:4vh 0 4vh;overflow-y:auto;}'
-        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,96vw);max-height:none;margin:auto 0;}'
-        + '#eca-panel .eca-header,#eca-batch-panel .eca-header{position:sticky;top:0;}'
-        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:none;}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,96vw);}'
+        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:none;overflow:visible;}'
         + '#eca-panel .eca-side{width:auto;flex:0 0 auto;border-right:0;border-bottom:1px solid #ded2bd;max-height:32vh;}'
         + '#eca-panel .eca-detail{padding:12px;}'
         + '#eca-panel .eca-grid{grid-template-columns:repeat(3,1fr);gap:8px;}'
