@@ -159,7 +159,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.1.0', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.0', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -462,7 +462,9 @@ test('M4-2 面板打开/关闭与角色列表渲染', function () {
   assert(items.length === 2, '角色列表数量错误：' + items.length);
   assert(items[0].textContent.indexOf('弗兰克') !== -1, '列表内容错误');
   var cells = panel.querySelectorAll('.eca-cell');
-  assert(cells.length === 10, '情绪格应为 10 个：' + cells.length);
+  assert(cells.length === 11, '情绪格应为 10 固定 + 1 新增格：' + cells.length);
+  assert(panel.querySelectorAll('.eca-cell[data-emotion]').length === 10, '固定情绪格数量错误');
+  assert(panel.querySelector('.eca-cell-add'), '缺少「新增情绪」格');
   window.EmoAvatar.closePanel();
   assert(panel.style.display === 'none', '面板未关闭');
 });
@@ -789,6 +791,176 @@ test('M5-5 对话框载图后渲染网格预览与默认映射', function () {
     assert(thumbs.length === 10 && thumbs[0].naturalWidth > 0, '格子缩略图未渲染');
     window.EmoAvatar.closeBatchDialog();
   });
+});
+
+/* ---------- M7 用例：自定义情绪（按角色独立，有图才算） ---------- */
+test('M7-1 自定义情绪按角色独立（getEmotionsOf）', function () {
+  window.EmoAvatar.setCharactersPersist(['自定义侠', '旁观侠']);
+  return __canvasBlob(140, '得意').then(function (blob) {
+    return window.EmoAvatar.saveAvatar('自定义侠', '得意', blob);
+  }).then(function () {
+    var a = window.EmoAvatar.getEmotionsOf('自定义侠');
+    var b = window.EmoAvatar.getEmotionsOf('旁观侠');
+    assert(a.indexOf('得意') !== -1, '自定义侠应有「得意」');
+    assert(a.length === 11, '自定义侠 = 10 固定 + 1 自定义：' + a.length);
+    assert(b.indexOf('得意') === -1 && b.length === 10, '旁观侠不应有「得意」：' + b.length);
+  });
+});
+test('M7-2 提示词罗列启用角色的自定义情绪', function () {
+  window.EmoAvatar.setCharacters(['自定义侠']);
+  var p1 = __lastInject();
+  assert(p1 && p1.prompts[0].content.indexOf('得意') !== -1, '提示词应含「得意」');
+  assert(p1.prompts[0].content.indexOf('情绪词限定：') !== -1, '情绪表应为动态文案');
+  window.EmoAvatar.setCharacters(['旁观侠']);
+  var p2 = __lastInject();
+  assert(p2 && p2.prompts[0].content.indexOf('得意') === -1, '无自定义图的角色不应带出「得意」');
+  window.EmoAvatar.setCharacters(['自定义侠', '旁观侠']);
+  var p3 = __lastInject();
+  assert(p3 && p3.prompts[0].content.indexOf('得意') !== -1, '启用组内任一角色有图即罗列');
+});
+test('M7-3 自定义情绪渲染与跨角色回落', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['自定义侠', '旁观侠']);
+  var mes = __addFloor('{自定义侠(得意)}“哼。”{旁观侠(得意)}“唔。”', false);
+  window.EmoAvatar.scanAll();
+  var imgs = mes.querySelectorAll('img.eca-avatar');
+  var phs = mes.querySelectorAll('.eca-placeholder');
+  assert(imgs.length === 1 && phs.length === 1, '应 1 图 + 1 占位：' + imgs.length + '/' + phs.length);
+  assert(imgs[0].dataset.ecaEmotion === '得意' && imgs[0].src.indexOf('blob:') === 0, '自定义侠应命中「得意」自定义图');
+  assert(phs[0].dataset.ecaEmotion === '得意', '旁观侠应保留原始情绪词');
+  assert(phs[0].title.indexOf('已登记') !== -1, '旁观侠占位应为「已登记，缺图」');
+});
+test('M7-4 删除自定义情绪即从提示词移除', function () {
+  window.EmoAvatar.setCharacters(['自定义侠']);
+  assert(__lastInject().prompts[0].content.indexOf('得意') !== -1, '前置：提示词应含「得意」');
+  return window.EmoAvatar.deleteAvatar('自定义侠', '得意').then(function () {
+    window.EmoAvatar.applyInjection();
+    var p = __lastInject();
+    assert(p && p.prompts[0].content.indexOf('得意') === -1, '删除后提示词不应再含「得意」');
+  });
+});
+test('M7-5 文件名「角色-情绪」派生新自定义情绪', function () {
+  var m = window.EmoAvatar.matchEmotionFromName;
+  assert(m('落寞.png') === null, '未知词不应命中');
+  assert(m('自定义侠-落寞.png', '自定义侠') === '落寞', '中划线前缀派生失败');
+  assert(m('自定义侠_落寞.png', '自定义侠') === '落寞', '下划线前缀派生失败');
+  assert(m('自定义侠-微笑.png', '自定义侠') === '微笑', '固定词应优先命中');
+  assert(m('随便什么.png', '自定义侠') === null, '非前缀文件不应派生');
+  assert(m('自定义侠-超长的情绪名字十个字.png', '自定义侠') === null, '超 8 字情绪名应拒绝');
+});
+test('M7-6 批量导入可写入自定义情绪', function () {
+  window.EmoAvatar.setCharactersPersist(['批量侠2']);
+  return __loadImg(__gridSheet(400, 100, 4, 1)).then(function (img) {
+    return window.EmoAvatar.runBatchImport('批量侠2', img, {
+      rows: 1, cols: 4, ratio: '1:1',
+      mappings: [{ row: 0, col: 0, emotion: '得意' }, { row: 0, col: 1, emotion: '嘟嘴' }],
+    });
+  }).then(function (r) {
+    assert(r.saved === 2 && r.failed === 0, '导入结果错误：' + JSON.stringify(r));
+    return window.EmoAvatar.getAllAvatarRecords();
+  }).then(function (records) {
+    assert(records.some(function (x) { return x.id === '批量侠2_嘟嘴'; }), '「嘟嘴」未入库');
+    assert(window.EmoAvatar.getEmotionsOf('批量侠2').indexOf('嘟嘴') !== -1, 'getEmotionsOf 应含「嘟嘴」');
+  });
+});
+test('M7-7 批量对话框「✎ 自定义…」录入与取消', function () {
+  window.EmoAvatar.setCharactersPersist(['预览侠2']);
+  window.EmoAvatar.openBatchDialogWithImage('预览侠2', __gridSheet(400, 100, 4, 1));
+  return __wait(400).then(function () {
+    var dlg = document.getElementById('eca-batch-panel');
+    var sels = dlg.querySelectorAll('.eca-bcell select');
+    assert(sels.length > 1 && sels[0].querySelector('option[value="__custom__"]'), '下拉缺少「✎ 自定义…」选项');
+    window.__promptValue = '挑眉';
+    sels[0].value = '__custom__';
+    sels[0].dispatchEvent(new Event('change', { bubbles: true }));
+    assert(sels[0].value === '挑眉', '录入后应显示新情绪：' + sels[0].value);
+    assert(!sels[0].closest('.eca-bcell').classList.contains('skipped'), '录入后不应为跳过态');
+    var prev = sels[1].value;
+    window.__promptValue = null;
+    sels[1].value = '__custom__';
+    sels[1].dispatchEvent(new Event('change', { bubbles: true }));
+    assert(sels[1].value === prev, '取消应保持原选择：' + sels[1].value + ' / ' + prev);
+    window.__promptValue = null;
+    window.EmoAvatar.closeBatchDialog();
+  });
+});
+
+/* ---------- M8 用例：多姓名绑定（别名） ---------- */
+test('M8-1 别名绑定后渲染同一套头像', function () {
+  __resetChat();
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  var url = __makeImg(120, '弗兰克·大笑');
+  window.EmoAvatar.seedAvatar('弗兰克', '大笑', url);
+  var ok = window.EmoAvatar.setAliases('弗兰克', 'Frank，老弗');
+  assert(ok && ok.length === 2, '别名写入失败：' + JSON.stringify(ok));
+  var mes = __addFloor('{Frank(大笑)}“哈！”{老弗(大笑)}“嗯。”', false);
+  window.EmoAvatar.scanAll();
+  var imgs = mes.querySelectorAll('img.eca-avatar');
+  assert(imgs.length === 2, '别名标签应渲染出头像');
+  assert(imgs[0].src === url && imgs[1].src === url, '别名应命中主名的头像图源');
+  assert(imgs[0].dataset.ecaName === 'Frank' && imgs[1].dataset.ecaName === '老弗', '应保留 AI 原始姓名');
+});
+test('M8-2 提示词只罗列主名', function () {
+  window.EmoAvatar.setCharacters(['弗兰克']);
+  var p = __lastInject();
+  assert(p && p.prompts[0].content.indexOf('若弗兰克说话') !== -1, '主名应注入');
+  assert(p.prompts[0].content.indexOf('Frank') === -1, '别名 Frank 不应注入提示词');
+  assert(p.prompts[0].content.indexOf('老弗') === -1, '别名 老弗 不应注入提示词');
+});
+test('M8-3 姓名唯一性与冲突拒绝', function () {
+  window.EmoAvatar.setCharacters(['弗兰克', '罗兰']);
+  assert(window.EmoAvatar.addCharacter('Frank') === false, '与别名撞名的新增应被拒');
+  assert(window.EmoAvatar.setAliases('罗兰', ['弗兰克']) === null, '与其他主名冲突应拒绝');
+  assert(window.EmoAvatar.setAliases('罗兰', ['Frank']) === null, '与其他角色别名冲突应拒绝');
+  assert(window.EmoAvatar.setAliases('罗兰', ['带括号(名)']) === null, '格式非法应拒绝');
+  var ok = window.EmoAvatar.setAliases('罗兰', ['小罗', '小罗', '罗兰']);
+  assert(ok && ok.length === 1 && ok[0] === '小罗', '重复项与主名同名项应被忽略：' + JSON.stringify(ok));
+  window.EmoAvatar.setAliases('罗兰', '');
+});
+test('M8-4 删除角色清理别名', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  window.EmoAvatar.setAliases('弗兰克', ['Frank', '老弗']);
+  return window.EmoAvatar.removeCharacter('弗兰克').then(function (ok) {
+    assert(ok === true, '删除失败');
+    assert(!window.EmoAvatar.getAliases()['弗兰克'], '别名表未随角色清理');
+    __resetChat();
+    var mes = __addFloor('{Frank(大笑)}gone', false);
+    window.EmoAvatar.scanAll();
+    assert(mes.querySelector('.eca-placeholder'), '角色删除后别名应失效');
+  });
+});
+test('M8-5 改名迁移别名', function () {
+  window.EmoAvatar.setCharactersPersist(['甲']);
+  window.EmoAvatar.setAliases('甲', ['A', '甲一']);
+  return window.EmoAvatar.renameCharacter('甲', '甲乙').then(function (ok) {
+    assert(ok === true, '改名失败');
+    var a = window.EmoAvatar.getAliases();
+    assert(a['甲乙'] && a['甲乙'].length === 2, '别名应随主名迁移：' + JSON.stringify(a));
+    assert(!a['甲'], '旧别名键应清除');
+    window.EmoAvatar.setAliases('甲乙', ['A', 'B']);
+    return window.EmoAvatar.renameCharacter('甲乙', 'A');
+  }).then(function (ok) {
+    assert(ok === true, '改名为自己的别名应被允许');
+    var a = window.EmoAvatar.getAliases();
+    assert(a['A'] && a['A'].length === 1 && a['A'][0] === 'B', '自别名应从列表移除：' + JSON.stringify(a));
+  });
+});
+test('M8-6 面板别名角标与多姓名编辑', function () {
+  window.EmoAvatar.setCharactersPersist(['角标侠']);
+  window.EmoAvatar.setAliases('角标侠', ['甲一', '甲二']);
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  var badge = panel.querySelector('.eca-char-alias');
+  assert(badge && badge.textContent === '+2', '别名角标错误：' + (badge && badge.textContent));
+  assert(document.getElementById('eca-alias-btn'), '详情头缺少「多姓名」按钮');
+  window.__promptValue = '甲三';
+  document.getElementById('eca-alias-btn').click();
+  var a = window.EmoAvatar.getAliases()['角标侠'];
+  assert(a && a.length === 1 && a[0] === '甲三', '多姓名编辑未生效：' + JSON.stringify(a));
+  badge = panel.querySelector('.eca-char-alias');
+  assert(badge && badge.textContent === '+1', '编辑后角标应刷新');
+  window.__promptValue = null;
+  window.EmoAvatar.closePanel();
 });
 
 /* ---------- 操作按钮 ---------- */

@@ -4,7 +4,8 @@
  * AI 在角色对话的自然段前输出 {角色名(情绪)} 标签，本脚本在显示层把标签替换为行内头像：
  * - 不修改消息原文（chat[i].mes 永不触碰），卸载脚本即回到原始文本
  * - 提示词经 injectPrompts 以 system / in_chat / depth 0 注入（MiniMapStatus 早期同款通道）
- * - 情绪词恒定十个：默认、微笑、愤怒、悲伤、惊讶、轻蔑、杀意、思考、大笑、害羞
+ * - 固定十个情绪词：默认、微笑、愤怒、悲伤、惊讶、轻蔑、杀意、思考、大笑、害羞；另可按角色新增自定义情绪
+ * - 一组头像可绑定多个姓名（别名），AI 输出任一姓名都渲染同一套头像
  * - 支持一张表情合集大图按网格切分批量导入
  */
 (function () {
@@ -14,16 +15,24 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.1.0';
+    const VERSION = '0.2.0';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
     const INJECT_ID = 'emoavatar-prompt';
     const LS_CHARACTERS = 'emoavatar_characters';
     const LS_SETTINGS = 'emoavatar_settings';
-    /** 情绪词恒定十个；顺序即批量导入网格的默认映射顺序 */
+    const LS_ALIASES = 'emoavatar_aliases';
+    /** 固定情绪词十个；顺序即批量导入网格的默认映射顺序。自定义情绪按角色独立（有图才算，见 getCustomEmotions） */
     const EMOTIONS = ['默认', '微笑', '愤怒', '悲伤', '惊讶', '轻蔑', '杀意', '思考', '大笑', '害羞'];
     const EMOTION_SET = new Set(EMOTIONS);
+    /** 已知情绪全集（固定 + 出现过的自定义），随头像记录同步；供提示词罗列与文件名匹配 */
+    let allEmotions = new Set(EMOTIONS);
+    /** 自定义情绪名校验：1-8 字，不含花括号/圆括号/下划线（下划线会破坏 `角色_情绪` 主键切分） */
+    function validateEmotionName(name) {
+        const s = String(name || '').trim();
+        return !!s && s.length <= 8 && !/[{}()_]/.test(s);
+    }
     /** 标签匹配：{角色名(情绪)}；角色名 1-30 字（不含花括号/圆括号），情绪 1-8 字 */
     const TAG_RE = /\{([^{}()]{1,30})\(([^{}()]{1,8})\)\}/g;
     /** 头像显示高度默认值（em），面板可调 */
@@ -58,15 +67,24 @@
     let characters = [];
     let groups = [];
     let groupSeq = 1;
+    /** 别名表：主名 → [其它姓名]；{别名(情绪)} 与 {主名(情绪)} 渲染同一套头像 */
+    let aliases = {};
+    let aliasToPrimary = {};
     const LS_GROUPS = 'emoavatar_groups';
 
     function makeGroupId() { return 'g' + Date.now().toString(36) + (groupSeq++); }
 
-    /** 由 groups 重建拍平索引（任何组结构变更后调用） */
+    /** 由 groups 重建拍平索引与别名反向索引（任何组结构/别名变更后调用） */
     function rebuildCharacterIndex() {
         characters = [];
         groups.forEach(function (g) {
             Array.prototype.push.apply(characters, g.members);
+        });
+        aliasToPrimary = {};
+        characters.forEach(function (primary) {
+            (aliases[primary] || []).forEach(function (alias) {
+                if (characters.indexOf(alias) === -1) aliasToPrimary[alias] = primary;
+            });
         });
     }
 
@@ -98,6 +116,16 @@
         if (!groups.length) {
             groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: [] }];
         }
+        try {
+            const storedAliases = JSON.parse(topWindow.localStorage.getItem(LS_ALIASES));
+            if (storedAliases && typeof storedAliases === 'object') {
+                Object.keys(storedAliases).forEach(function (key) {
+                    if (Array.isArray(storedAliases[key])) {
+                        aliases[key] = storedAliases[key].filter(function (a) { return typeof a === 'string' && a; });
+                    }
+                });
+            }
+        } catch (e) { /* 保持空 */ }
         rebuildCharacterIndex();
         try {
             const s = JSON.parse(topWindow.localStorage.getItem(LS_SETTINGS));
@@ -113,7 +141,10 @@
         } catch (e) { /* 存储失败不阻塞 */ }
     }
     function persistSettings() {
-        try { topWindow.localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) { /* 存储失败不阻塞 */ }
+        try { topWindow.localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) { /* 保持默认 */ }
+    }
+    function persistAliases() {
+        try { topWindow.localStorage.setItem(LS_ALIASES, JSON.stringify(aliases)); } catch (e) { /* 存储失败不阻塞 */ }
     }
 
     // ============================================
@@ -135,9 +166,9 @@
         // 段首头像两列布局：align-items: flex-start + margin-top: 0.18em 首行文字光学绝对平齐，
         // 彻底解决多行台词导致头像浮空中部的问题；双层装裱微边框与纸面微投影完美契合；
         // 结合 2px 暖咖色左侧引言呼吸线，普通叙述旁白适度微退，形成清晰典雅的阅读层次
-        + '.mes_text p.eca-p{display:flex;align-items:center;gap:.75em;margin:1.25em 0;}'
+        + '.mes_text p.eca-p{display:flex;align-items:flex-start;gap:.75em;margin:1.25em 0;}'
         + '.mes_text p.eca-p > .eca-avatar:first-child{flex:0 0 auto;'
-        + 'width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);max-width:none;margin:0;'
+        + 'width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);max-width:none;margin:.18em 0 0;'
         + 'border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.25);object-fit:cover;}'
         + '.mes_text p.eca-p > .eca-text{flex:1 1 auto;min-width:0;line-height:1.85;'
         + 'border-left:2px solid rgba(140,105,65,.32);padding-left:.65em;}'
@@ -179,17 +210,39 @@
     /** 内存头像缓存：`角色名_情绪` → 图片 src（M1 由调试桥填充，M3 起由 IndexedDB 预热） */
     const avatarCache = new Map();
 
-    function isRegistered(name) { return characters.indexOf(name) !== -1; }
+    /** 姓名解析：主名原样返回；别名映射到主名；未登记返回 null */
+    function resolveName(name) {
+        if (characters.indexOf(name) !== -1) return name;
+        const primary = aliasToPrimary[name];
+        return primary && characters.indexOf(primary) !== -1 ? primary : null;
+    }
+
+    function isRegistered(name) { return resolveName(name) !== null; }
+
+    /** 情绪对该角色是否有效：固定词，或该角色已上传过该自定义情绪的图 */
+    function isValidEmotionFor(character, emotion) {
+        return EMOTION_SET.has(emotion) || avatarCache.has(character + '_' + emotion);
+    }
+
+    /** 某角色当前实际存在的自定义情绪（有图才算） */
+    function getCustomEmotions(character) {
+        const list = [];
+        allEmotions.forEach(function (emo) {
+            if (!EMOTION_SET.has(emo) && avatarCache.has(character + '_' + emo)) list.push(emo);
+        });
+        return list;
+    }
 
     /**
      * 三级容错解析，返回可用于 <img> 的 src，null 表示渲染占位头像：
-     * 未注册 → null；无效情绪/缺图 → 回落该角色"默认"图；默认也缺 → null
+     * 未注册（含未绑定别名）→ null；该角色无效情绪/缺图 → 回落其"默认"图；默认也缺 → null
      */
     function resolveTag(name, emotion) {
-        if (!isRegistered(name)) return null;
-        if (!EMOTION_SET.has(emotion)) emotion = '默认';
-        let src = avatarCache.get(name + '_' + emotion);
-        if (!src && emotion !== '默认') src = avatarCache.get(name + '_默认');
+        const primary = resolveName(name);
+        if (!primary) return null;
+        if (!isValidEmotionFor(primary, emotion)) emotion = '默认';
+        let src = avatarCache.get(primary + '_' + emotion);
+        if (!src && emotion !== '默认') src = avatarCache.get(primary + '_默认');
         return src || null;
     }
 
@@ -349,6 +402,18 @@
         return list;
     }
 
+    /** 提示词情绪表：固定十个 + 启用组各角色实际已传图的自定义情绪（按角色独立，无图不罗列） */
+    function getInjectionEmotions() {
+        const tags = EMOTIONS.slice();
+        const seen = {};
+        getInjectionCharacters().forEach(function (name) {
+            getCustomEmotions(name).forEach(function (emo) {
+                if (!seen[emo]) { seen[emo] = true; tags.push(emo); }
+            });
+        });
+        return tags;
+    }
+
     function buildPrompt() {
         const injectable = getInjectionCharacters();
         if (!injectable.length) return null;
@@ -359,8 +424,8 @@
             + '咧嘴一笑，那笑容里带着一股嗜血的狠劲，“那最好不过了。看不见的东西，通常也躲不开这种口径的子弹。”';
         return '<头像标记>\n'
             + '若' + list + '说话，请在对应自然段前加入标记`{名称(情绪)}`。\n'
-            + '情绪词限定十个：' + EMOTIONS.join('、') + '\n'
-            + '无法确定时，优先使用默认。\n'
+            + '情绪词限定：' + getInjectionEmotions().join('、') + '\n'
+            + '无法确定或该角色缺少某情绪时，优先使用默认。\n'
             + '例：\n'
             + example + '\n'
             + '</头像标记>';
@@ -462,6 +527,7 @@
                 request.onsuccess = function () {
                     revokeCacheUrl(avatarCache.get(id));
                     avatarCache.set(id, createBlobUrl(blob));
+                    allEmotions.add(emotion);
                     resolve();
                 };
                 request.onerror = function () { reject(request.error); };
@@ -528,6 +594,7 @@
     function preloadAvatars() {
         return getAllAvatarRecords().then(function (records) {
             records.forEach(function (r) {
+                allEmotions.add(r.emotion);
                 if (!avatarCache.has(r.id)) avatarCache.set(r.id, createBlobUrl(r.imageBlob));
             });
         }).catch(function (e) {
@@ -606,6 +673,14 @@
         + '#eca-panel .eca-cell-empty{width:100%;height:100%;border:1px dashed #b8a584;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#7d6b56;font-size:12px;font-family:"Cinzel","STSong","Songti SC",serif;background:rgba(240,230,210,.25);transition:all .15s ease;}'
         + '#eca-panel .eca-cell:hover .eca-cell-empty{border-color:#9c7138;color:#9c7138;background:rgba(195,152,77,.1);}'
         + '#eca-panel .eca-cell-name{font-size:12px;font-weight:600;color:#493725;font-family:"Cinzel","STSong","Songti SC",serif;line-height:1.2;padding-top:2px;}'
+        // 自定义情绪格删除钮与「＋新增情绪」格
+        + '#eca-panel .eca-cell-del{position:absolute;top:3px;right:3px;z-index:2;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;border:0;background:rgba(148,51,37,.85);color:#fff;font-size:10px;cursor:pointer;opacity:0;transition:opacity .15s ease;padding:0;}'
+        + '#eca-panel .eca-cell:hover .eca-cell-del{opacity:1;}'
+        + '#eca-panel .eca-cell.eca-cell-add{border-style:dashed;background:rgba(251,248,242,.5);}'
+        + '#eca-panel .eca-cell.eca-cell-add .eca-cell-empty{font-size:20px;font-weight:600;}'
+        + '#eca-panel .eca-cell.eca-cell-add .eca-cell-name{color:#7d6b56;font-weight:500;}'
+        // 角色项别名角标
+        + '#eca-panel .eca-char-alias{flex:0 0 auto;color:#9c7138;font-size:10px;background:rgba(195,152,77,.16);border-radius:8px;padding:0 5px;}'
         // 底栏控件
         + '#eca-panel .eca-switch{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-weight:500;color:#2b1f13;}'
         + '#eca-panel .eca-switch input{accent-color:#3f684c;cursor:pointer;}'
@@ -693,7 +768,7 @@
     function addCharacter(name, groupId) {
         name = String(name || '').trim();
         if (!name || name.length > 30 || /[{}()]/.test(name)) return false;
-        if (characters.indexOf(name) !== -1) return false;
+        if (characters.indexOf(name) !== -1 || aliasToPrimary[name]) return false;
         const group = (groupId && groups.filter(function (g) { return g.id === groupId; })[0]) || groups[0];
         if (!group) return false;
         group.members.push(name);
@@ -707,6 +782,8 @@
         const group = findGroupByChar(name);
         if (!group) return Promise.resolve(false);
         group.members.splice(group.members.indexOf(name), 1);
+        delete aliases[name];
+        persistAliases();
         rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === name) selectedCharacter = characters[0] || null;
@@ -718,14 +795,46 @@
         newName = String(newName || '').trim();
         if (!newName || newName.length > 30 || /[{}()]/.test(newName)) return Promise.resolve(false);
         if (characters.indexOf(newName) !== -1) return Promise.resolve(false);
+        if (aliasToPrimary[newName] && aliasToPrimary[newName] !== oldName) return Promise.resolve(false);
         const group = findGroupByChar(oldName);
         if (!group) return Promise.resolve(false);
+        // 别名表随主名迁移；新名若原是自己的别名则从列表移除
+        if (aliases[oldName]) {
+            const kept = aliases[oldName].filter(function (a) { return a !== newName; });
+            delete aliases[oldName];
+            if (kept.length) aliases[newName] = kept;
+            persistAliases();
+        }
         group.members[group.members.indexOf(oldName)] = newName;
         rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === oldName) selectedCharacter = newName;
         applyInjection();
         return renameCharacterAvatars(oldName, newName).then(function () { return true; });
+    }
+
+    /**
+     * 写入某角色的别名列表（数组或逗号/顿号分隔字符串）。
+     * 与主名同名、列表内重复的项静默忽略；格式非法或与其他主名/别名冲突则整体拒绝返回 null。
+     * 空列表 = 清除该角色全部别名。成功返回去重后的别名数组。
+     */
+    function setAliases(name, list) {
+        if (characters.indexOf(name) === -1) return null;
+        const raw = Array.isArray(list) ? list : String(list || '').split(/[，,、]+/);
+        const cleaned = [];
+        for (let i = 0; i < raw.length; i++) {
+            const alias = String(raw[i] || '').trim();
+            if (!alias || alias === name || cleaned.indexOf(alias) !== -1) continue;
+            if (alias.length > 30 || /[{}()]/.test(alias)) return null;
+            if (characters.indexOf(alias) !== -1) return null;
+            if (aliasToPrimary[alias] && aliasToPrimary[alias] !== name) return null;
+            cleaned.push(alias);
+        }
+        if (cleaned.length) aliases[name] = cleaned;
+        else delete aliases[name];
+        rebuildCharacterIndex();
+        persistAliases();
+        return cleaned;
     }
 
     // ---------- 人物组操作 ----------
@@ -784,24 +893,40 @@
         return true;
     }
 
-    /** 单格上传入口：降采样（长边 256）后入库 */
+    /** 单格上传入口：降采样（长边 256）后入库；情绪词须为固定词或格式合法的自定义词 */
     function uploadAvatarFile(character, emotion, file) {
-        if (!EMOTION_SET.has(emotion)) return Promise.reject(new Error('非法情绪词：' + emotion));
+        if (!EMOTION_SET.has(emotion) && !validateEmotionName(emotion)) {
+            return Promise.reject(new Error('非法情绪词：' + emotion));
+        }
         return downscaleBlob(file, 256).then(function (blob) {
             return saveAvatar(character, emotion, blob);
         });
     }
 
-    /** 文件名包含中文情绪名即命中；多个命中取最先出现者；无命中返回 null */
-    function matchEmotionFromName(name) {
+    /**
+     * 文件名含情绪名即命中（候选 = 固定 + 已知自定义），多个命中取最先出现者；
+     * 未命中且传入 character 时，按「角色名-情绪.png」前缀派生新情绪（贴合拆图命名约定）。
+     * 均无命中返回 null。
+     */
+    function matchEmotionFromName(name, character) {
         let best = null;
         let bestIdx = Infinity;
         const text = String(name || '');
-        for (let i = 0; i < EMOTIONS.length; i++) {
-            const idx = text.indexOf(EMOTIONS[i]);
-            if (idx !== -1 && idx < bestIdx) { best = EMOTIONS[i]; bestIdx = idx; }
-        }
-        return best;
+        allEmotions.forEach(function (emo) {
+            const idx = text.indexOf(emo);
+            if (idx !== -1 && idx < bestIdx) { best = emo; bestIdx = idx; }
+        });
+        if (best || !character) return best;
+        if (text.indexOf(character) !== 0) return null;
+        let rest = text.slice(character.length);
+        const sep = rest.charAt(0);
+        if (sep !== '-' && sep !== '_' && sep !== ' ') return null;
+        rest = rest.slice(1).trim();
+        const dot = rest.lastIndexOf('.');
+        if (dot > 0) rest = rest.slice(0, dot);
+        rest = rest.trim();
+        if (!validateEmotionName(rest) || EMOTION_SET.has(rest)) return null;
+        return rest;
     }
 
     // ---------- 面板 DOM ----------
@@ -895,6 +1020,8 @@
             if (del) { removeCharacterFlow(del.dataset.name); return; }
             const rename = target.closest ? target.closest('#eca-rename-btn') : null;
             if (rename) { renameCharacterFlow(selectedCharacter); return; }
+            const aliasBtn = target.closest ? target.closest('#eca-alias-btn') : null;
+            if (aliasBtn) { aliasFlow(selectedCharacter); return; }
             const batch = target.closest ? target.closest('#eca-batch-btn') : null;
             if (batch) { openBatchDialog(selectedCharacter); return; }
             // 组头点击：折叠/展开（点名字区域或箭头）
@@ -911,6 +1038,10 @@
                 renderPanel();
                 return;
             }
+            const cellDel = target.closest ? target.closest('.eca-cell-del') : null;
+            if (cellDel && cellDel.dataset.emotion) { removeEmotionFlow(selectedCharacter, cellDel.dataset.emotion); return; }
+            const addCell = target.closest ? target.closest('.eca-cell-add') : null;
+            if (addCell) { addEmotionFlow(); return; }
             const cell = target.closest ? target.closest('.eca-cell') : null;
             if (cell && cell.dataset.emotion && selectedCharacter) {
                 fileInputEl.dataset.emotion = cell.dataset.emotion;
@@ -968,6 +1099,7 @@
             if (files.length === 1) {
                 uploadAvatarFile(selectedCharacter, emotion, files[0])
                     .then(function () {
+                        applyInjection();
                         renderPanel();
                         toast('已更新「' + selectedCharacter + '·' + emotion + '」');
                     })
@@ -979,6 +1111,7 @@
             let failed = 0;
             const skipped = [];
             const finish = function () {
+                applyInjection();
                 renderPanel();
                 let msg = '已导入 ' + done + ' 张（' + selectedCharacter + '）';
                 if (failed) msg += '，失败 ' + failed + ' 张';
@@ -988,7 +1121,7 @@
                 }
             };
             files.forEach(function (file) {
-                const matched = matchEmotionFromName(file.name);
+                const matched = matchEmotionFromName(file.name, selectedCharacter);
                 if (!matched) { skipped.push(file.name); return; }
                 uploadAvatarFile(selectedCharacter, matched, file)
                     .then(function () { done++; })
@@ -1016,8 +1149,9 @@
     function buildSizePreviewEl() {
         let sample = null;
         if (selectedCharacter) {
-            for (let i = 0; i < EMOTIONS.length; i++) {
-                const src = avatarCache.get(selectedCharacter + '_' + EMOTIONS[i]);
+            const candidates = EMOTIONS.concat(getCustomEmotions(selectedCharacter));
+            for (let i = 0; i < candidates.length; i++) {
+                const src = avatarCache.get(selectedCharacter + '_' + candidates[i]);
                 if (src) { sample = src; break; }
             }
         }
@@ -1073,8 +1207,10 @@
                 + '</div>';
             const members = g.members.length
                 ? g.members.map(function (name) {
+                    const aliasList = aliases[name] || [];
                     return '<div class="eca-char-item' + (name === selectedCharacter ? ' active' : '') + '" draggable="true" data-name="' + escapeHtml(name) + '">'
                         + '<span class="eca-char-name">' + escapeHtml(name) + '</span>'
+                        + (aliasList.length ? '<span class="eca-char-alias" title="其它姓名：' + escapeHtml(aliasList.join('、')) + '">+' + aliasList.length + '</span>' : '')
                         + '<button class="eca-char-del" data-name="' + escapeHtml(name) + '" title="删除角色及头像">✕</button>'
                         + '</div>';
                 }).join('')
@@ -1087,23 +1223,33 @@
         // 角色详情
         const detail = panelEl.querySelector('#eca-detail');
         if (!selectedCharacter) {
-            detail.innerHTML = '<div class="eca-detail-empty">左侧新增一个角色后，在这里为十种情绪配置头像</div>';
+            detail.innerHTML = '<div class="eca-detail-empty">左侧新增一个角色后，在这里为其配置各情绪头像</div>';
         } else {
-            const cells = EMOTIONS.map(function (emotion) {
+            const renderCell = function (emotion, extraCls) {
                 const src = avatarCache.get(selectedCharacter + '_' + emotion);
                 const imgHtml = src
                     ? '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(emotion) + '">'
                     : '<div class="eca-cell-empty">' + escapeHtml(emotion) + '</div>';
-                return '<div class="eca-cell" data-emotion="' + escapeHtml(emotion) + '" title="点击上传/更换「' + escapeHtml(emotion) + '」头像">'
+                return '<div class="eca-cell' + (extraCls || '') + '" data-emotion="' + escapeHtml(emotion) + '" title="点击上传/更换「' + escapeHtml(emotion) + '」头像">'
+                    + (extraCls ? '<button class="eca-cell-del" data-emotion="' + escapeHtml(emotion) + '" title="删除该情绪及头像">✕</button>' : '')
                     + '<div class="eca-cell-img">' + imgHtml + '</div>'
                     + '<div class="eca-cell-name">' + escapeHtml(emotion) + '</div>'
                     + '</div>';
-            }).join('');
+            };
+            const cells = EMOTIONS.map(function (emotion) { return renderCell(emotion); }).join('')
+                + getCustomEmotions(selectedCharacter).map(function (emotion) { return renderCell(emotion, ' eca-cell-custom'); }).join('')
+                + '<div class="eca-cell eca-cell-add" title="新增自定义情绪：输入名称后立即上传图片（仅作用于该角色）">'
+                + '<div class="eca-cell-img"><div class="eca-cell-empty">＋</div></div>'
+                + '<div class="eca-cell-name">新增情绪</div>'
+                + '</div>';
+            const aliasTip = aliases[selectedCharacter] && aliases[selectedCharacter].length
+                ? '；其它姓名：' + escapeHtml(aliases[selectedCharacter].join('、')) : '';
             detail.innerHTML = ''
                 + '<div class="eca-detail-head"><b>' + escapeHtml(selectedCharacter) + '</b>'
                 + '<button class="eca-mini-btn" id="eca-batch-btn">批量导入大图</button>'
-                + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button></div>'
-                + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；多选文件时按文件名自动匹配情绪；十种情绪缺图时自动回落「默认」</div>'
+                + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button>'
+                + '<button class="eca-mini-btn" id="eca-alias-btn">多姓名</button></div>'
+                + '<div class="eca-detail-tip">点击格子上传 / 更换单张头像；多选文件按文件名自动匹配情绪（「角色名-情绪.png」可直接落地新情绪）；缺图时自动回落「默认」' + aliasTip + '</div>'
                 + '<div class="eca-grid">' + cells + '</div>';
         }
         syncPanelControls();
@@ -1194,6 +1340,42 @@
         });
     }
 
+    /** 新增自定义情绪：输名 → 立即选图；取消选图则标签不落地（纯派生，无残留） */
+    function addEmotionFlow() {
+        if (!selectedCharacter) return;
+        const input = uiPrompt('新增情绪名（1-8 字，不含括号与下划线，仅作用于「' + selectedCharacter + '」）：', '');
+        if (input === null) return;
+        const emotion = String(input).trim();
+        if (!validateEmotionName(emotion) || EMOTION_SET.has(emotion)) { toast('情绪名无效（1-8 字，不含括号与下划线）或已存在', true); return; }
+        if (avatarCache.has(selectedCharacter + '_' + emotion)) { toast('「' + selectedCharacter + '」已有情绪「' + emotion + '」', true); return; }
+        fileInputEl.dataset.emotion = emotion;
+        fileInputEl.click();
+    }
+
+    function removeEmotionFlow(character, emotion) {
+        if (!character || !emotion) return;
+        if (!uiConfirm('删除「' + character + '」的情绪「' + emotion + '」及其头像？')) return;
+        deleteAvatar(character, emotion).then(function () {
+            applyInjection();
+            renderPanel();
+            toast('已删除情绪「' + emotion + '」（' + character + '）');
+        });
+    }
+
+    /** 多姓名绑定：编辑某角色的别名列表（逗号/顿号分隔，留空清除） */
+    function aliasFlow(name) {
+        if (!name) return;
+        const current = (aliases[name] || []).join('，');
+        const input = uiPrompt('为「' + name + '」绑定其它姓名（多个用逗号分隔，AI 输出任一姓名都显示这套头像；留空清除）：', current);
+        if (input === null) return;
+        const result = setAliases(name, input);
+        if (result === null) { toast('别名无效（1-30 字，不含括号）或与其他角色姓名冲突', true); return; }
+        renderPanel();
+        toast(result.length
+            ? '「' + name + '」已绑定 ' + result.length + ' 个其它姓名：' + result.join('、')
+            : '已清除「' + name + '」的其它姓名');
+    }
+
     // ============================================
     // 单图批量网格导入（M5）：移植自 galgame v2.2，核心逻辑与对话框 UI 分离
     // ============================================
@@ -1256,7 +1438,7 @@
         const cols = config.cols;
         const ratio = config.ratio || '1:1';
         const mappings = (config.mappings || []).filter(function (m) {
-            return m && m.emotion && EMOTION_SET.has(m.emotion);
+            return m && m.emotion && (EMOTION_SET.has(m.emotion) || validateEmotionName(m.emotion));
         });
         let saved = 0, failed = 0;
         let chain = Promise.resolve();
@@ -1425,18 +1607,23 @@
         img.src = c.toDataURL();
     }
 
-    /** 互斥下拉：已被其他格选走的情绪不再出现在选项里 */
+    /** 互斥下拉：已被其他格选走的情绪不再出现在选项里；新情绪经「✎ 自定义…」录入 */
     function updateAllBatchSelectOptions() {
         const used = {};
         batchMappings.forEach(function (m) { if (m.emotion) used[m.emotion] = true; });
+        const options = EMOTIONS.concat(getCustomEmotions(batchCharacter));
         batchEl.querySelectorAll('.eca-bcell select').forEach(function (sel) {
             const index = parseInt(sel.dataset.index, 10);
             const current = batchMappings[index].emotion;
             let html = '<option value="">-- 跳过 --</option>';
-            EMOTIONS.forEach(function (emo) {
+            options.forEach(function (emo) {
                 if (used[emo] && emo !== current) return;
                 html += '<option value="' + escapeHtml(emo) + '"' + (emo === current ? ' selected' : '') + '>' + emo + '</option>';
             });
+            if (current && options.indexOf(current) === -1) {
+                html += '<option value="' + escapeHtml(current) + '" selected>' + escapeHtml(current) + '</option>';
+            }
+            html += '<option value="__custom__">✎ 自定义…</option>';
             sel.innerHTML = html;
         });
     }
@@ -1465,6 +1652,7 @@
             saveBtn.disabled = false;
             saveBtn.textContent = '保存全部头像';
             closeBatchDialog();
+            applyInjection();
             renderPanel();
             scanAll();
             toast('批量导入完成：成功 ' + r.saved + ' 张' + (r.failed ? '，失败 ' + r.failed + ' 张' : ''), r.failed > 0);
@@ -1549,9 +1737,23 @@
             const sel = ev.target;
             if (!sel.dataset || sel.dataset.index === undefined) return;
             const index = parseInt(sel.dataset.index, 10);
-            batchMappings[index].emotion = sel.value;
-            batchMappings[index].skip = !sel.value;
-            sel.closest('.eca-bcell').classList.toggle('skipped', !sel.value);
+            let value = sel.value;
+            if (value === '__custom__') {
+                const prev = batchMappings[index].emotion;
+                const used = {};
+                batchMappings.forEach(function (m, i) { if (m.emotion && i !== index) used[m.emotion] = true; });
+                const input = uiPrompt('自定义情绪名（1-8 字，不含括号与下划线）：', '');
+                const name = input === null ? '' : String(input).trim();
+                if (validateEmotionName(name) && !used[name]) {
+                    value = name;
+                } else {
+                    toast(input === null ? '已取消，保持原选择' : '情绪名无效或已被其它格使用', true);
+                    value = prev || '';
+                }
+            }
+            batchMappings[index].emotion = value;
+            batchMappings[index].skip = !value;
+            sel.closest('.eca-bcell').classList.toggle('skipped', !value);
             updateAllBatchSelectOptions();
             updateBatchTip();
         });
@@ -1572,7 +1774,7 @@
         version: VERSION,
         emotions: EMOTIONS.slice(),
         /** 调试/harness 桥：直接向内存缓存塞头像（不落库） */
-        seedAvatar(name, emotion, src) { avatarCache.set(name + '_' + emotion, src); },
+        seedAvatar(name, emotion, src) { allEmotions.add(emotion); avatarCache.set(name + '_' + emotion, src); },
         /** 调试/harness 桥：整体替换登记名单（不落 localStorage，但会同步重注提示词） */
         setCharacters(list) {
             groups = [{ id: makeGroupId(), name: '默认组', enabled: true, members: list.slice() }];
@@ -1594,6 +1796,7 @@
         clearMemoryCache() {
             avatarCache.forEach(function (url) { revokeCacheUrl(url); });
             avatarCache.clear();
+            allEmotions = new Set(EMOTIONS);
         },
         /* 登记操作桥（持久化） */
         setCharactersPersist(list) {
@@ -1607,6 +1810,10 @@
         renameCharacter: renameCharacter,
         uploadAvatarFile: uploadAvatarFile,
         matchEmotionFromName: matchEmotionFromName,
+        /* 自定义情绪与别名桥 */
+        getEmotionsOf(name) { return EMOTIONS.concat(characters.indexOf(name) !== -1 ? getCustomEmotions(name) : []); },
+        setAliases: setAliases,
+        getAliases() { return JSON.parse(JSON.stringify(aliases)); },
         /* 人物组桥 */
         getGroups() { return JSON.parse(JSON.stringify(groups)); },
         addGroup: addGroup,
@@ -1638,8 +1845,8 @@
         hookEvents();
         applyInjection();
         scanAll();
-        // 预热完成后重扫一次，让已有楼层换上真实头像
-        preloadAvatars().then(scanAll);
+        // 预热完成后重注提示词（自定义情绪依赖缓存）并重扫，让已有楼层换上真实头像
+        preloadAvatars().then(function () { applyInjection(); scanAll(); });
     }
     if (doc.readyState === 'loading') {
         doc.addEventListener('DOMContentLoaded', init, { once: true });
