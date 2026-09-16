@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.1';
+    const VERSION = '0.2.2';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -386,6 +386,22 @@
             });
         }
         hookStreamObserver();
+        hookEscapeCloser();
+    }
+
+    /** Esc 关闭顶层弹窗：批量对话框优先，其次管理面板；输入框聚焦时不抢 */
+    let escapeCloserHooked = false;
+    function hookEscapeCloser() {
+        if (escapeCloserHooked) return;
+        escapeCloserHooked = true;
+        doc.addEventListener('keydown', function (ev) {
+            const key = ev.key || ev.keyCode;
+            if (key !== 'Escape' && key !== 'Esc' && key !== 27) return;
+            const tag = ev.target && ev.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (batchEl && batchEl.style.display === 'flex') { closeBatchDialog(); return; }
+            if (panelEl && panelEl.style.display === 'flex') closePanel();
+        });
     }
 
     // ============================================
@@ -744,10 +760,13 @@
         + '#eca-panel ::-webkit-scrollbar-track,#eca-batch-panel ::-webkit-scrollbar-track{background:rgba(220,205,180,.3);border-radius:3px;}'
         + '#eca-panel ::-webkit-scrollbar-thumb,#eca-batch-panel ::-webkit-scrollbar-thumb{background:#cfbea0;border-radius:3px;}'
         + '#eca-panel ::-webkit-scrollbar-thumb:hover,#eca-batch-panel ::-webkit-scrollbar-thumb:hover{background:#b5a281;}'
-        // 移动端窄屏：纵向堆叠 + 网格降列 + 底栏收紧，避免左右挤压与竖排单字
+        // 移动端窄屏：纵向堆叠 + 网格降列 + 底栏收紧，避免左右挤压与竖排单字；
+        // 遮罩顶部对齐 + 头栏粘顶，保证窄屏下关闭按钮始终可达
         + '@media (max-width:640px){'
-        + '#eca-panel .eca-modal{width:min(820px,96vw);max-height:92vh;}'
-        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:calc(92vh - 110px);}'
+        + '#eca-panel,#eca-batch-panel{align-items:flex-start;padding:4vh 0 4vh;overflow-y:auto;}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,96vw);max-height:none;margin:auto 0;}'
+        + '#eca-panel .eca-header,#eca-batch-panel .eca-header{position:sticky;top:0;}'
+        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:none;}'
         + '#eca-panel .eca-side{width:auto;flex:0 0 auto;border-right:0;border-bottom:1px solid #ded2bd;max-height:32vh;}'
         + '#eca-panel .eca-detail{padding:12px;}'
         + '#eca-panel .eca-grid{grid-template-columns:repeat(3,1fr);gap:8px;}'
@@ -1038,7 +1057,9 @@
 
     function bindPanelEvents(root) {
         root.querySelector('.eca-close').addEventListener('click', closePanel);
+        // 点遮罩空白关闭：只响应直接落在遮罩根节点上的点击，弹窗内部不误关
         root.addEventListener('click', function (ev) {
+            if (ev.target === root) { closePanel(); return; }
             const target = ev.target;
             if (target.id === 'eca-add-char') { addCharacterFlow(); return; }
             if (target.id === 'eca-add-group') { addGroupFlow(); return; }

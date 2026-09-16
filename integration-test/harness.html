@@ -159,7 +159,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.1', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.2', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -348,7 +348,7 @@ test('M1-12 置顶开关：默认居中，打开切顶对齐且持久化', funct
   assert(cb.closest('.eca-footer-actions'), '开关应在新增分组右侧的 .eca-footer-actions 内');
   window.EmoAvatar.closePanel();
 });
-test('M4-11 移动端 CSS：窄屏不断竖排、不挤压', function () {
+test('M4-11 移动端 CSS：窄屏不断竖排、不挤压、顶部可达可关', function () {
   var style = document.getElementById('eca-panel-styles');
   assert(style, '缺少 #eca-panel-styles');
   var css = style.textContent;
@@ -356,6 +356,8 @@ test('M4-11 移动端 CSS：窄屏不断竖排、不挤压', function () {
   assert(css.indexOf('repeat(3,1fr)') !== -1, '窄屏情绪网格应降为 3 列');
   assert(css.indexOf('flex-direction:column') !== -1, '窄屏面板主体应纵向堆叠');
   assert(css.indexOf('white-space:nowrap') !== -1, '情绪名/开关应防竖排压字');
+  assert(css.indexOf('align-items:flex-start') !== -1, '窄屏遮罩应顶部对齐，避免顶部被顶出可视区');
+  assert(css.indexOf('position:sticky') !== -1, '窄屏头栏应粘顶，保证关闭按钮可达');
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */
@@ -500,6 +502,23 @@ test('M4-2 面板打开/关闭与角色列表渲染', function () {
   assert(panel.querySelector('.eca-cell-add'), '缺少「新增情绪」格');
   window.EmoAvatar.closePanel();
   assert(panel.style.display === 'none', '面板未关闭');
+});
+test('M4-12 遮罩点击与 Escape 关闭弹窗', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  assert(panel.style.display === 'flex', '面板未显示');
+  // 点遮罩根节点关闭（直接落在遮罩上）
+  panel.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  assert(panel.style.display === 'none', '点遮罩应关闭面板');
+  // 点弹窗内部不误关
+  window.EmoAvatar.openPanel();
+  panel.querySelector('.eca-modal').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  assert(panel.style.display === 'flex', '点弹窗内部不应关闭');
+  // Escape 关闭
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert(panel.style.display === 'none', 'Escape 应关闭面板');
+  window.EmoAvatar.closePanel();
 });
 test('M4-3 新增角色流程（名单+注入+面板同步）', function () {
   window.EmoAvatar.setCharactersPersist(['弗兰克']);
