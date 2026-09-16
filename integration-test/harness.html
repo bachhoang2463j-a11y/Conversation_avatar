@@ -159,7 +159,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.3', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.4', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -358,6 +358,8 @@ test('M4-11 移动端 CSS：窄屏不断竖排、不挤压、顶部可达可关'
   assert(css.indexOf('white-space:nowrap') !== -1, '情绪名/开关应防竖排压字');
   assert(css.indexOf('position:absolute') !== -1, '遮罩应用 absolute 脱离酒馆移动端布局污染');
   assert(css.indexOf('align-items:flex-start') !== -1, '遮罩应顶部对齐，避免顶部被顶出可视区');
+  assert(css.indexOf('max-height:calc(100dvh - 8vh)') !== -1, '弹窗应限高，避免底栏被挤出视口');
+  assert(css.indexOf('overflow-y:auto') !== -1, '窄屏主体/遮罩应可滚，底栏可达');
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */

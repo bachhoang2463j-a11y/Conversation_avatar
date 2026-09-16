@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.3';
+    const VERSION = '0.2.4';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -652,9 +652,11 @@
         // fixed 会以它为基准被压成一条；absolute 跟随 body（top/left 0 宽视口）即可全屏。
         + '#eca-panel,#eca-batch-panel{display:none;position:absolute;top:0;left:0;width:100%;min-height:100%;z-index:99999;background:rgba(18,13,8,.65);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);align-items:flex-start;justify-content:center;padding:4vh 0;box-sizing:border-box;font-size:13px;font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}'
         + '#eca-batch-panel{z-index:100001;background:rgba(18,13,8,.7);}'
-        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,94vw);max-height:none;display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee 0%,#f4eddc 45%,#ecdfc7 100%);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45),0 0 0 1px rgba(160,130,90,.25);position:relative;overflow:hidden;flex:0 0 auto;}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,94vw);max-height:calc(100vh - 8vh);max-height:calc(100dvh - 8vh);display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee 0%,#f4eddc 45%,#ecdfc7 100%);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45),0 0 0 1px rgba(160,130,90,.25);position:relative;overflow:hidden;flex:0 0 auto;}'
         + '#eca-panel .eca-modal::before,#eca-batch-panel .eca-modal::before{content:"";position:absolute;inset:3px;border:1px solid #ded2bd;border-radius:9px;pointer-events:none;box-shadow:inset 0 0 16px rgba(150,115,75,.1);}'
-        + '#eca-batch-panel .eca-modal{width:min(880px,94vw);max-height:90vh;}'
+        + '#eca-batch-panel .eca-modal{width:min(880px,94vw);}'
+        // 批量对话框主体自身可滚：内容超高时内部滚，底栏保存按钮不出视口
+        + '#eca-batch-panel .eca-batch-body{min-height:0;}'
         + '#eca-panel .eca-header,#eca-batch-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;border-bottom:1px solid #ded2bd;background:rgba(246,238,222,.7);position:relative;z-index:2;font-weight:700;color:#2b1f13;font-family:"Cinzel","STSong","Songti SC","Noto Serif SC",Georgia,serif;font-size:15px;letter-spacing:.02em;}'
         + '#eca-panel .eca-close,#eca-batch-panel .eca-close{background:none;border:1px solid transparent;color:#7d6b56;font-size:18px;cursor:pointer;line-height:1;padding:0 5px;border-radius:5px;transition:all .15s ease;}'
         + '#eca-panel .eca-close:hover,#eca-batch-panel .eca-close:hover{color:#943325;background:rgba(148,51,37,.1);border-color:rgba(148,51,37,.25);}'
@@ -763,10 +765,13 @@
         + '#eca-panel ::-webkit-scrollbar-thumb,#eca-batch-panel ::-webkit-scrollbar-thumb{background:#cfbea0;border-radius:3px;}'
         + '#eca-panel ::-webkit-scrollbar-thumb:hover,#eca-batch-panel ::-webkit-scrollbar-thumb:hover{background:#b5a281;}'
         // 移动端窄屏：纵向堆叠 + 网格降列 + 底栏收紧，避免左右挤压与竖排单字；
-        // 遮罩顶部对齐 + 头栏粘顶，保证窄屏下关闭按钮始终可达
+        // 遮罩顶部对齐 + 头栏粘顶，保证窄屏下关闭按钮始终可达；
+        // 弹窗限高 + 主体内滚 + 遮罩可滚，保证底栏按钮可达
         + '@media (max-width:640px){'
-        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,96vw);}'
-        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:none;overflow:visible;}'
+        + '#eca-panel .eca-modal,#eca-batch-panel .eca-modal{width:min(820px,96vw);max-height:calc(100dvh - 8vh);}'
+        + '#eca-panel,#eca-batch-panel{overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;}'
+        + '#eca-panel .eca-header,#eca-batch-panel .eca-header{position:sticky;top:0;}'
+        + '#eca-panel .eca-body{flex-direction:column;min-height:0;max-height:none;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;flex:1 1 auto;}'
         + '#eca-panel .eca-side{width:auto;flex:0 0 auto;border-right:0;border-bottom:1px solid #ded2bd;max-height:32vh;}'
         + '#eca-panel .eca-detail{padding:12px;}'
         + '#eca-panel .eca-grid{grid-template-columns:repeat(3,1fr);gap:8px;}'
