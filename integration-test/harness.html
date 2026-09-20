@@ -422,7 +422,7 @@ test('M1-16 生成中实时替换且只插入 1 次（未开延时渲染）', fu
     obs.disconnect();
   });
 });
-test('M1-17 连续逐 token 变更：节流窗口内即渲染，不等空闲', function () {
+test('M1-17 连续逐 token 变更：连续变更期间即渲染，不等空闲', function () {
   __resetChat(); __seedM1();
   window.__trigger('generation_started', 'normal', {}, false);
   var mes = __addFloor('', false);
@@ -437,17 +437,20 @@ test('M1-17 连续逐 token 变更：节流窗口内即渲染，不等空闲', f
     });
   });
   obs.observe(document.getElementById('chat'), { childList: true, subtree: true });
-  var i = 0;
-  var timer = setInterval(function () {
-    i += 2;
+  for (var i = 2; i <= full.length; i += 2) {
     target.textContent = full.slice(0, i);
-    if (i >= full.length) clearInterval(timer);
-  }, 50);
-  return __wait(700).then(function () {
-    clearInterval(timer);
+  }
+  // 同一次任务里的连续写入会触发观察器微任务；此时必须已有头像，不能等 250ms 窗口。
+  return Promise.resolve().then(function () {
+    return Promise.resolve();
+  }).then(function () {
     obs.disconnect();
-    assert(inserted >= 1, '连续变更期间应至少渲染一次头像（50ms 间隔变更不得让窗口反复顺延），实际 ' + inserted + ' 次');
-    assert(target.querySelector('img.eca-avatar'), '流式结束后楼层应停着头像');
+    assert(inserted >= 1, '连续变更期间应至少渲染一次头像（不能等节流窗口），实际 ' + inserted + ' 次');
+    assert(target.querySelector('img.eca-avatar'), '连续变更结束后楼层应停着头像');
+    window.__trigger('message_received', 0, 'normal');
+    return __wait(300);
+  }).then(function () {
+    assert(target.querySelectorAll('img.eca-avatar').length === 1, '结束事件后重扫应幂等');
   });
 });
 test('M1-18 生成期同帧渲染：不等节流窗口（防原始标签闪现）', function () {
@@ -488,6 +491,28 @@ test('M4-11 移动端 CSS：窄屏不断竖排、不挤压、顶部可达可关'
   assert(css.indexOf('align-items:flex-start') !== -1, '遮罩应顶部对齐，避免顶部被顶出可视区');
   assert(css.indexOf('max-height:calc(100dvh - 8vh)') !== -1, '弹窗应限高，避免底栏被挤出视口');
   assert(css.indexOf('overflow-y:auto') !== -1, '窄屏主体/遮罩应可滚，底栏可达');
+});
+test('M4-13 移动端诊断页覆盖无控制台排障字段', function () {
+  return fetch('mobile-beautify-diagnostic.html').then(function (r) {
+    assert(r.ok, '诊断页无法加载：' + r.status);
+    return r.text();
+  }).then(function (html) {
+    [
+      'navigator.userAgent',
+      '脚本桥存在',
+      '样式表已注入',
+      '标签已替换',
+      '段首段落已加 .eca-p',
+      '文本已包 .eca-text',
+      '段落计算样式',
+      '头像计算样式',
+      '文本计算样式',
+      '结论：',
+      'navigator.clipboard'
+    ].forEach(function (key) {
+      assert(html.indexOf(key) !== -1, '诊断页缺少字段：' + key);
+    });
+  });
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */

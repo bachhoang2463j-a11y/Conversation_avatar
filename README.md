@@ -86,7 +86,8 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 开发与测试
 
-- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），63 个用例覆盖渲染、容错、流式实时渲染（含生成期同帧渲染 M1-18、连续变更节流 M1-17）与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
+- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），64 个用例覆盖渲染、容错、流式实时渲染（含生成期同帧渲染 M1-18、连续变更节流 M1-17）与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、移动端无控制台诊断页（M4-13）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
 - 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行）
 - `node --check emotion-avatar.js` 语法校验
+- `integration-test/mobile-beautify-diagnostic.html`：移动端无控制台排障页。手机上直接打开该页即可看到“脚本是否执行 / 标签是否替换 / `.eca-p` 与 `.eca-text` 是否生成 / 共享 CSS 是否命中计算样式”的可视化报告，并支持复制发回。
 - 排障打标（默认关闭，不改行为）：控制台 `EmoAvatar.setDebug(true)` 打开判定链日志（前缀 `[ECA-DBG`）；`EmoAvatar.debugStatus()` 取状态快照（delayRender / generationActive / 脏标记 / 各定时器）；`EmoAvatar.debugLogs()` 取环形缓冲日志（控制台抓不到 iframe 日志时用）；`EmoAvatar.setDebug(false)` 关闭。开关持久化在 localStorage `emoavatar_debug`
