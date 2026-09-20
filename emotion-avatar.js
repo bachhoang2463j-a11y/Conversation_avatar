@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.8';
+    const VERSION = '0.2.9';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -381,12 +381,14 @@
     }
 
     /**
-     * 段落中部的标签行拆段：酒馆 showdown 开启 simpleLineBreaks 后，标签前只有
-     * 单换行（无空行）时标签会留在同一 <p> 里、前面隔一个 <br>，导致头像不满足
+     * 标签行拆段：酒馆 showdown 开启 simpleLineBreaks 后，标签前只有单换行（无空行）
+     * 时标签会留在同一 <p> 里、前面隔一个 <br>，导致头像不满足
      * `p > .eca-avatar:first-child`，两列布局失效。这里把「行首是头像」的视觉行
-     * 从原 <p> 拆出成独立 <p>（切点 <br> 由段边界替代，段内 <br> 保留），
-     * 随后交给 wrapLeadingAvatarParagraphs 走既有两列逻辑；行内文字中的标签
-     * （前面无换行）不拆。幂等：已 eca-p 的段跳过；无可拆点时不动 DOM。
+     * 从原 <p> 拆出成独立 <p>（前后切点 <br> 由段边界替代，段内 <br> 保留），
+     * 使双列单元只含标签行本身，标签行之后同段的内容（无标签行）排除出右列、
+     * 独立成段；行内文字中的标签（前面无换行）不拆。
+     * 随后交给 wrapLeadingAvatarParagraphs 走既有两列逻辑。
+     * 幂等：已 eca-p 的段跳过；无可拆点时不动 DOM。
      */
     function splitMidParagraphAvatarLines(root) {
         const scope = root || doc;
@@ -406,10 +408,14 @@
             const segs = [];
             let seg = [];
             for (let r = 0; r < rows.length; r++) {
-                if (seg.length && rowStartsWithAvatar(rows[r])) { segs.push(seg); seg = []; }
-                seg.push(rows[r]);
+                if (rowStartsWithAvatar(rows[r])) {
+                    if (seg.length) { segs.push(seg); seg = []; }
+                    segs.push([rows[r]]);
+                } else {
+                    seg.push(rows[r]);
+                }
             }
-            segs.push(seg);
+            if (seg.length) segs.push(seg);
             if (segs.length < 2) continue;
             const firstLast = segs[0][segs[0].length - 1];
             const cutBr = firstLast[firstLast.length - 1];
