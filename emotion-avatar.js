@@ -2272,6 +2272,28 @@
         if (placeholders.length > 0) {
             add(false, '占位头像', placeholders.length + ' 个（角色未登记/缺图，非 CSS 问题）');
         }
+        // 头像父元素分布：定位两列布局为何未生效（父元素必须为 p 且头像在首位）
+        if (avatars.length > 0) {
+            let parentP = 0, parentPFirst = 0, parentOther = 0, parentMesText = 0;
+            const parentSamples = {};
+            for (let i = 0; i < avatars.length; i++) {
+                const parent = avatars[i].parentElement;
+                if (!parent) continue;
+                const tag = parent.tagName.toLowerCase();
+                const isP = tag === 'p';
+                const isFirst = parent.firstElementChild === avatars[i];
+                if (isP) {
+                    parentP++;
+                    if (isFirst) parentPFirst++;
+                } else {
+                    parentOther++;
+                    if (tag === 'div' && parent === findMesTextRoot(parent)) parentMesText++;
+                }
+                const key = tag + (isP ? (isFirst ? '+首' : '+非首') : (isFirst ? '+首' : '+非首'));
+                parentSamples[key] = (parentSamples[key] || 0) + 1;
+            }
+            lines.push('头像父元素：p=' + parentP + ' 个（其中首位 ' + parentPFirst + '）｜非 p=' + parentOther + ' 个｜分布=' + JSON.stringify(parentSamples));
+        }
         const ps = doc.querySelectorAll('.mes_text p.eca-p');
         if (avatars.length > 0) {
             add(ps.length > 0, '段首两列化 p.eca-p', ps.length + ' 个');
@@ -2292,6 +2314,35 @@
                 lines.push('  文本块：flex=' + tcs.flex + ' borderLeft=' + tcs.borderLeft + ' paddingLeft=' + tcs.paddingLeft);
             }
         }
+        // 首个含头像楼层的 DOM 结构摘要：判定头像为何未进入两列布局
+        if (avatars.length > 0 && ps.length === 0) {
+            const firstMes = Array.prototype.find.call(mesTexts, function (m) { return m.querySelector('.eca-avatar'); });
+            if (firstMes) {
+                const childSummary = Array.prototype.map.call(firstMes.children, function (ch) {
+                    return ch.tagName.toLowerCase() + (ch.className && typeof ch.className === 'string' ? '.' + ch.className.split(' ').join('.') : '');
+                }).slice(0, 14);
+                lines.push('楼层子节点结构：' + JSON.stringify(childSummary));
+                const av = firstMes.querySelector('.eca-avatar');
+                const parent = av.parentElement;
+                if (parent) {
+                    const pc = topWindow.getComputedStyle(parent);
+                    lines.push('头像父元素：<' + parent.tagName.toLowerCase() + '> class="' + parent.className + '"'
+                        + ' 首位=' + (parent.firstElementChild === av)
+                        + ' display=' + pc.display
+                        + ' position=' + pc.position + ' paddingLeft=' + pc.paddingLeft);
+                    if (parent.tagName.toLowerCase() === 'p') {
+                        const before = parent.firstElementChild === av ? '' : '（头像前有其他元素：' + (parent.firstElementChild ? parent.firstElementChild.tagName.toLowerCase() : '无') + '）';
+                        lines.push('  p 内子元素：' + Array.prototype.map.call(parent.children, function (ch) {
+                            return ch.tagName.toLowerCase() + (ch.className && typeof ch.className === 'string' ? '.' + ch.className.split(' ').join('.') : '');
+                        }).join(', ') + before);
+                    }
+                }
+            }
+        }
+        // :has() 兼容性检测（两列兜底依赖它）：CSS.supports 对 :has 相对选择器有误报，用 querySelector 语法解析判定
+        let hasSupport = true;
+        try { doc.querySelector(':scope a:has(> i)'); } catch (e) { hasSupport = false; }
+        add(hasSupport, ':has() 兼容性', hasSupport ? '支持' : '不支持（两列兜底失效）');
         const status = topWindow.EmoAvatar && topWindow.EmoAvatar.debugStatus ? topWindow.EmoAvatar.debugStatus() : null;
         if (status) lines.push('脚本状态：' + JSON.stringify(status));
         if (dbgBuffer.length > 0) {

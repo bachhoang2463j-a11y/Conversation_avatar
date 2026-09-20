@@ -511,6 +511,8 @@ test('M4-13 面板内排障诊断：按钮存在、报告完整、可复制', fu
     '登记角色',
     '找到 .mes_text',
     '已渲染头像',
+    '头像父元素',
+    ':has() 兼容性',
     '段首两列化',
     '计算样式',
     '结论：'
@@ -528,6 +530,23 @@ test('M4-13 面板内排障诊断：按钮存在、报告完整、可复制', fu
   document.getElementById('eca-diag-panel').querySelector('.eca-close').click();
   assert(document.getElementById('eca-diag-panel').style.display === 'none', '关闭按钮应能关闭诊断弹窗');
   window.EmoAvatar.closePanel();
+});
+
+test('M4-14 诊断报告：头像在非 p 容器时能输出结构定位', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['弗兰克']);
+  window.EmoAvatar.seedAvatar('弗兰克', '微笑', __makeImg(10, '微笑'));
+  // 模拟移动端酒馆渲染：头像直接挂在 .mes_text 下（无 p 包裹）
+  var mes = __addFloor('{弗兰克(微笑)}直接挂在 .mes_text 下的内容。', false);
+  window.EmoAvatar.scanAll();
+  var report = window.EmoAvatar.buildDiagReport();
+  assert(report.indexOf('头像父元素：p=0') !== -1, '非 p 场景应报告 p=0：\n' + report);
+  assert(report.indexOf('楼层子节点结构') !== -1, '报告缺少楼层子节点结构');
+  var mesText = mes.querySelector('.mes_text');
+  var avatar = mesText.querySelector('.eca-avatar');
+  assert(avatar, '头像应已替换');
+  var cs = getComputedStyle(mesText);
+  assert(cs.paddingLeft !== '0px' || cs.position === 'relative', ':has() 兜底应给 .mes_text 让位：paddingLeft=' + cs.paddingLeft + ' position=' + cs.position);
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */
