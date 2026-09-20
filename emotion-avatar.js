@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.7';
+    const VERSION = '0.2.8';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -68,6 +68,7 @@
     let debugOn = false;
     try { debugOn = topWindow.localStorage.getItem(LS_DEBUG) === '1'; } catch (e) { debugOn = false; }
     let dbgReplaced = 0;
+    let dbgSplit = 0;
     const dbgBuffer = [];
     const dbgCounts = {};
     const dbgStartedAt = Date.now();
@@ -369,6 +370,71 @@
         for (let i = 0; i < nodes.length; i++) processTextNode(nodes[i]);
     }
 
+    /** 行首判定：跳过行首空白文本，第一个元素若是头像则视为「行首标签行」 */
+    function rowStartsWithAvatar(rowNodes) {
+        for (let i = 0; i < rowNodes.length; i++) {
+            const n = rowNodes[i];
+            if (n.nodeType === 1) return n.classList.contains('eca-avatar');
+            if (n.nodeType === 3 && n.nodeValue.trim() !== '') return false;
+        }
+        return false;
+    }
+
+    /**
+     * 段落中部的标签行拆段：酒馆 showdown 开启 simpleLineBreaks 后，标签前只有
+     * 单换行（无空行）时标签会留在同一 <p> 里、前面隔一个 <br>，导致头像不满足
+     * `p > .eca-avatar:first-child`，两列布局失效。这里把「行首是头像」的视觉行
+     * 从原 <p> 拆出成独立 <p>（切点 <br> 由段边界替代，段内 <br> 保留），
+     * 随后交给 wrapLeadingAvatarParagraphs 走既有两列逻辑；行内文字中的标签
+     * （前面无换行）不拆。幂等：已 eca-p 的段跳过；无可拆点时不动 DOM。
+     */
+    function splitMidParagraphAvatarLines(root) {
+        const scope = root || doc;
+        const list = scope.querySelectorAll('.mes_text p');
+        for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            if (p.classList.contains('eca-p')) continue;
+            if (!p.querySelector(':scope > .eca-avatar')) continue;
+            const children = Array.prototype.slice.call(p.childNodes);
+            const rows = [];
+            let row = [];
+            for (let k = 0; k < children.length; k++) {
+                row.push(children[k]);
+                if (children[k].nodeType === 1 && children[k].tagName === 'BR') { rows.push(row); row = []; }
+            }
+            if (row.length) rows.push(row);
+            const segs = [];
+            let seg = [];
+            for (let r = 0; r < rows.length; r++) {
+                if (seg.length && rowStartsWithAvatar(rows[r])) { segs.push(seg); seg = []; }
+                seg.push(rows[r]);
+            }
+            segs.push(seg);
+            if (segs.length < 2) continue;
+            const firstLast = segs[0][segs[0].length - 1];
+            const cutBr = firstLast[firstLast.length - 1];
+            if (cutBr && cutBr.nodeType === 1 && cutBr.tagName === 'BR') cutBr.parentNode.removeChild(cutBr);
+            let anchor = p;
+            for (let s = 1; s < segs.length; s++) {
+                const np = doc.createElement('p');
+                const segRows = segs[s];
+                for (let r = 0; r < segRows.length; r++) {
+                    const nodes = segRows[r];
+                    const lastRow = r === segRows.length - 1;
+                    for (let k = 0; k < nodes.length; k++) {
+                        const nd = nodes[k];
+                        if (lastRow && k === nodes.length - 1 && s < segs.length - 1
+                            && nd.nodeType === 1 && nd.tagName === 'BR') continue;
+                        np.appendChild(nd);
+                    }
+                }
+                anchor.parentNode.insertBefore(np, anchor.nextSibling);
+                anchor = np;
+            }
+            dbgSplit += segs.length - 1;
+        }
+    }
+
     /**
      * 段首头像两列化：p 的首个子节点是头像时，把头像后的全部兄弟内容
      * （文本、<q>、<em> 等）包进单个 .eca-text，使段落成为
@@ -446,12 +512,14 @@
         if (!isConnectedToDocument(root)) return;
         const t0 = debugOn ? dbgNow() : 0;
         const before = dbgReplaced;
+        const beforeSplit = dbgSplit;
         syncRenderedAvatars(root);
         processMesText(root);
         syncRenderedAvatars(root);
+        splitMidParagraphAvatarLines(root);
         wrapLeadingAvatarParagraphs(root);
         if (debugOn) {
-            dbg('scanRoot：实际替换标签 ' + (dbgReplaced - before) + ' 个，耗时 ' + (dbgNow() - t0).toFixed(1) + 'ms，楼层现有头像元素 ' + root.querySelectorAll('.eca-avatar').length + ' 个');
+            dbg('scanRoot：实际替换标签 ' + (dbgReplaced - before) + ' 个，拆段 ' + (dbgSplit - beforeSplit) + ' 个，耗时 ' + (dbgNow() - t0).toFixed(1) + 'ms，楼层现有头像元素 ' + root.querySelectorAll('.eca-avatar').length + ' 个');
         }
     }
 

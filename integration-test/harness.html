@@ -165,7 +165,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.7', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.8', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1202,6 +1202,95 @@ test('M8-6 面板别名角标与多姓名编辑', function () {
   assert(badge && badge.textContent === '+1', '编辑后角标应刷新');
   window.__promptValue = null;
   window.EmoAvatar.closePanel();
+});
+
+/* ---------- M9 用例：中段落标签行拆段（showdown 单换行形态） ---------- */
+test('M9-1 单换行标签行拆段两列化（真机移动端问题复现）', function () {
+  __resetChat(); __seedM1();
+  // 真实酒馆管线形态：showdown simpleLineBreaks 把单换行渲染为同段 <br>，标签前隔一个 <br>
+  var mes = __addFloor('<p>王天霸再也压不住火，破锣嗓子震得水榭柱子直掉灰。<br />\n{弗兰克(愤怒)}<q>“到底好没好？！”</q></p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 2, '应拆成两个 p，实际 ' + ps.length);
+  assert(ps[0].textContent.indexOf('直掉灰') !== -1 && !ps[0].querySelector('.eca-avatar'), '第一段应保留上文且无头像');
+  assert(!ps[0].querySelector('br'), '切点 <br> 应被段边界替代');
+  var p2 = ps[1];
+  assert(p2.classList.contains('eca-p'), '标签段应加 .eca-p');
+  assert(getComputedStyle(p2).display === 'flex', '标签段应为 flex 两列：' + getComputedStyle(p2).display);
+  var img = p2.querySelector(':scope > img.eca-avatar');
+  assert(img && p2.firstElementChild === img, '头像应为段首元素');
+  var txt = p2.querySelector(':scope > .eca-text');
+  assert(txt && txt.textContent.indexOf('到底好没好') !== -1, '台词应在 .eca-text 内');
+  assert(p2.querySelector('q'), '引号元素应保留');
+});
+test('M9-2 一个段落内多行标签各自成段', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>开场叙述。<br />{弗兰克(微笑)}台词甲<br />中段旁白。<br />{弗兰克(愤怒)}台词乙</p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 3, '应拆成三个 p，实际 ' + ps.length);
+  assert(ps[0].textContent.indexOf('开场叙述') !== -1 && !ps[0].classList.contains('eca-p'), '首段无头像不应两列');
+  assert(ps[1].classList.contains('eca-p') && ps[1].textContent.indexOf('中段旁白') !== -1, '第二段应两列且含中间旁白行');
+  assert(ps[2].classList.contains('eca-p') && ps[2].textContent.indexOf('台词乙') !== -1, '第三段应两列');
+  assert(ps[1].querySelectorAll('.eca-avatar').length === 1 && ps[2].querySelectorAll('.eca-avatar').length === 1, '每段应各一个头像');
+  assert(ps[1].querySelector('br'), '段内行间 <br> 应保留');
+});
+test('M9-3 行内文字中的标签不拆段（仅行首标签行参与拆段）', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>他清了清嗓子{弗兰克(微笑)}说道。</p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 1, '行内标签不应拆段，p 数 = ' + ps.length);
+  assert(ps[0].textContent.indexOf('他清了清嗓子') !== -1 && ps[0].textContent.indexOf('说道') !== -1, '行内文字应完整保留在同一段');
+  assert(ps[0].querySelector('img.eca-avatar'), '头像应已替换');
+});
+test('M9-4 拆段幂等：重复扫描不重复拆/不重复包裹', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>上文。<br />{弗兰克(微笑)}台词</p>', false);
+  window.EmoAvatar.scanAll();
+  var n1 = mes.querySelectorAll('.mes_text > p').length;
+  window.EmoAvatar.scanAll();
+  window.EmoAvatar.scanAll();
+  var n2 = mes.querySelectorAll('.mes_text > p').length;
+  assert(n1 === 2 && n2 === 2, '重复扫描 p 数变化：' + n1 + '→' + n2);
+  var p2 = mes.querySelectorAll('.mes_text > p')[1];
+  assert(p2.querySelectorAll('.eca-text').length === 1, '重复包裹 .eca-text');
+  assert(mes.querySelectorAll('img.eca-avatar').length === 1, '头像重复或丢失');
+});
+test('M9-5 真实酒馆管线消息端到端（引号美化 + simpleLineBreaks）', function () {
+  __resetChat(); __seedM1();
+  // 取自 D:\SillyTavern 真实渲染输出：单换行→段内 <br>，空行→独立 p，引号已包成 <q>
+  var raw = '<p>王天霸再也压不住火，粗大的手指一指那老神医，破锣嗓子震得水榭柱子直掉灰。<br />\n'
+    + '{弗兰克(愤怒)}<q>“到底好没好？！”</q></p>\n'
+    + '<p>老神医趴在马腹下，战战兢兢地回道：</p>\n'
+    + '<p>{弗兰克(默认)}<q>"这是一条测试消息"</q>王天霸说。</p>\n'
+    + '<p>测试测试测试测试</p>';
+  var mes = __addFloor(raw, false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 5, '应拆为 5 段（原单换行段拆 2 + 其余 3），实际 ' + ps.length);
+  assert(ps[1].classList.contains('eca-p') && ps[1].querySelector(':scope > img.eca-avatar'), '单换行标签行未两列化');
+  assert(ps[2].textContent.indexOf('老神医') !== -1 && !ps[2].classList.contains('eca-p'), '空行叙述段被误动');
+  assert(ps[3].classList.contains('eca-p'), '空行标签段未两列化');
+  assert(ps[4].textContent.indexOf('测试测试') !== -1 && !ps[4].classList.contains('eca-p'), '无标签段被误动');
+});
+test('M9-6 标签行后的无标签行归属右列（现状锁定）', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>{弗兰克(微笑)}台词。<br />测试测试测试测试</p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 1 && ps[0].classList.contains('eca-p'), '段首标签段应两列');
+  var txt = ps[0].querySelector(':scope > .eca-text');
+  assert(txt && txt.textContent.indexOf('测试测试测试测试') !== -1, '后续无标签行应保留在右列');
+});
+test('M9-7 段首标签后续行首标签各自成段', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('<p>{弗兰克(微笑)}台词甲<br />{弗兰克(愤怒)}台词乙</p>', false);
+  window.EmoAvatar.scanAll();
+  var ps = mes.querySelectorAll('.mes_text > p');
+  assert(ps.length === 2, '应拆成两段，实际 ' + ps.length);
+  assert(ps[0].classList.contains('eca-p') && ps[1].classList.contains('eca-p'), '两段都应两列');
+  assert(ps[0].querySelector('img.eca-avatar') && ps[1].querySelector('img.eca-avatar'), '两段应各有头像');
 });
 
 /* ---------- 操作按钮 ---------- */
