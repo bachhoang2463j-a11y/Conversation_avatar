@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.6';
+    const VERSION = '0.2.7';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -523,6 +523,13 @@
             armDelayFallback();
             return;
         }
+        // 生成期酒馆每个 token 会重写楼层 innerHTML，等节流窗口会看到原始标签闪现；
+        // 在观察器回调内同帧渲染，把"被抹掉"和"补插回"压进同一帧，绘制前就恢复头像。
+        if (generationActive) {
+            dbgHot('sync', 'mutation → 生成期同帧渲染：立即处理脏楼层 roots=' + info.roots.size + ' full=' + info.full);
+            flushPendingScan(false);
+            return;
+        }
         if (streamTimer !== null) {
             dbgHot('timer', 'mutation → 并入在途 ' + STREAM_IDLE_DELAY + 'ms 节流窗口');
             return;
@@ -559,7 +566,7 @@
     function scheduleCompletionScan() {
         dbg('完成事件到达：generationActive ' + generationActive + ' → false，pendingFullScan=true，delayRender=' + !!settings.delayRender);
         generationActive = false;
-        dbgReset('mut', 'timer', 'arm');
+        dbgReset('mut', 'timer', 'arm', 'sync');
         pendingFullScan = true;
         if (!settings.delayRender) {
             scheduleScan();
@@ -590,20 +597,20 @@
         dbg('hookStreamObserver：MutationObserver 已挂载到 #chat');
     }
 
-    /** 生成开始：登记生成状态；延时模式下顺带取消在途的实时渲染窗口 */
+    /** 生成开始：登记生成状态（默认模式据此同帧渲染，延时模式据此取消在途渲染窗口） */
     function onGenerationStarted(type, params, dryRun) {
         if (dryRun || (type === 'quiet' && !(params && params.quietToLoud))) {
             dbg('generation_started 忽略：type=' + type + ' dryRun=' + !!dryRun + ' quietToLoud=' + !!(params && params.quietToLoud));
             return;
         }
-        dbgReset('mut', 'timer', 'arm');
+        dbgReset('mut', 'timer', 'arm', 'sync');
         generationActive = true;
         if (settings.delayRender && streamTimer !== null) {
             clearTimeout(streamTimer);
             streamTimer = null;
             dbg('generation_started：generationActive=true；延时模式，清除在途 streamTimer（生成期间不渲染）');
         } else {
-            dbg('generation_started：generationActive=true（默认模式流式期间照常按节流窗口实时渲染）');
+            dbg('generation_started：generationActive=true（默认模式流式期间同帧渲染，防原始标签闪现）');
         }
     }
 

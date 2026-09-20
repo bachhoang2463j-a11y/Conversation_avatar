@@ -165,7 +165,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.6', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.7', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -395,7 +395,7 @@ test('M1-15 已渲染头像随素材覆盖就地更新', function () {
   window.EmoAvatar.scanAll();
   assert(mes.querySelector('img.eca-avatar').src === next, '已有头像应就地切换新图');
 });
-test('M1-16 生成中按节流窗口实时替换（未开延时渲染）', function () {
+test('M1-16 生成中实时替换且只插入 1 次（未开延时渲染）', function () {
   __resetChat(); __seedM1();
   window.EmoAvatar.setDelayRender(false);
   window.__trigger('generation_started', 'normal', {}, false);
@@ -448,6 +448,31 @@ test('M1-17 连续逐 token 变更：节流窗口内即渲染，不等空闲', f
     obs.disconnect();
     assert(inserted >= 1, '连续变更期间应至少渲染一次头像（50ms 间隔变更不得让窗口反复顺延），实际 ' + inserted + ' 次');
     assert(target.querySelector('img.eca-avatar'), '流式结束后楼层应停着头像');
+  });
+});
+test('M1-18 生成期同帧渲染：不等节流窗口（防原始标签闪现）', function () {
+  __resetChat(); __seedM1();
+  window.__trigger('generation_started', 'normal', {}, false);
+  var mes = __addFloor('', false);
+  var target = mes.querySelector('.mes_text');
+  var inserted = 0;
+  var obs = new MutationObserver(function (records) {
+    records.forEach(function (r) {
+      Array.prototype.forEach.call(r.addedNodes, function (n) {
+        if (n.nodeType === 1 && n.classList.contains('eca-avatar')) inserted++;
+      });
+    });
+  });
+  obs.observe(document.getElementById('chat'), { childList: true, subtree: true });
+  target.textContent = '{弗兰克(微笑)}同帧渲染';
+  // MutationObserver 回调是微任务且排在下面 then 之前：两个微任务内必须已完成渲染，
+  // 等价于"同一帧内"（浏览器绘制在该任务及其微任务之后）；等 250ms 节流窗口的实现会失败。
+  return Promise.resolve().then(function () {
+    return Promise.resolve();
+  }).then(function () {
+    obs.disconnect();
+    assert(inserted === 1, '生成期应在同一帧内插入头像，实际 ' + inserted + ' 次');
+    assert(target.querySelector('img.eca-avatar'), '生成期头像应在同帧内就位');
   });
 });
 

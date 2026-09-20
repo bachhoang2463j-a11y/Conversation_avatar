@@ -8,7 +8,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 - **不强制任何输出格式**——不禁写法、不限单行台词、正文完整走酒馆原生 markdown 渲染
 - **逐标签独立替换**——漏一个标签只少一个头像，段落文本永不受损，无"整段渲染失败"
 - **两列布局纯 CSS 实现**——`:has()` 选中"头像为段落首个元素"的段落，头像绝对定位到左列、文字右移；标签在段中的段落保持行内样式，无头像段落不受影响
-- 零轮询、零 `setInterval`、事件驱动 + 按变更楼层合并的流式渲染；流式输出期间按 250ms 节流窗口实时渲染（只扫变更楼层、已渲染头像就地更新，不整段重建）；开启延时渲染后改为生成期间不替换、完成后统一处理
+- 零轮询、零 `setInterval`、事件驱动 + 按变更楼层合并的流式渲染；流式输出期间实时渲染——生成期在 DOM 变更回调内**同帧**完成替换（酒馆每个 token 重写楼层时，头像被抹掉与补插落在同一帧，看不到原始标签闪现），非生成期按 250ms 窗口合并；只扫变更楼层、已渲染头像就地更新，不整段重建；开启延时渲染后改为生成期间不替换、完成后统一处理
 
 ## 安装
 
@@ -41,7 +41,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
   - 已登记角色 + 有效情绪 → 对应头像
   - 已登记角色 + 该角色没有的情绪词（含其他角色的自定义情绪）/ 缺图 → 自动回落该角色「默认」头像
   - 未登记角色 → 灰色问号占位头像（悬停可看名字，便于发现漏登记）
-- 流式渲染：默认实时——流式输出期间按 250ms 节流窗口渲染，只处理发生变更的楼层，已渲染头像就地更新不重建；开启延时渲染后改为生成期间保留原始标记，`MESSAGE_RECEIVED` / `GENERATION_ENDED` / `GENERATION_STOPPED` 后统一替换，宿主未提供完成事件时静默约 1 秒兜底。
+- 流式渲染：默认实时且不闪标签——生成期（`GENERATION_STARTED` → 完成事件）内的 DOM 变更在同一帧内完成替换，非生成期按 250ms 窗口合并，只处理发生变更的楼层，已渲染头像就地更新不重建；开启延时渲染后改为生成期间保留原始标记，`MESSAGE_RECEIVED` / `GENERATION_ENDED` / `GENERATION_STOPPED` 后统一替换，宿主未提供完成事件时静默约 1 秒兜底。
 - 头像素材覆盖或删除时，已渲染楼层会就地更新为新图/占位，不需要等待楼层重渲染。
 
 ## 提示词注入
@@ -86,7 +86,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 开发与测试
 
-- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），62 个用例覆盖渲染、容错、流式实时渲染与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
+- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），63 个用例覆盖渲染、容错、流式实时渲染（含生成期同帧渲染 M1-18、连续变更节流 M1-17）与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
 - 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行）
 - `node --check emotion-avatar.js` 语法校验
 - 排障打标（默认关闭，不改行为）：控制台 `EmoAvatar.setDebug(true)` 打开判定链日志（前缀 `[ECA-DBG`）；`EmoAvatar.debugStatus()` 取状态快照（delayRender / generationActive / 脏标记 / 各定时器）；`EmoAvatar.debugLogs()` 取环形缓冲日志（控制台抓不到 iframe 日志时用）；`EmoAvatar.setDebug(false)` 关闭。开关持久化在 localStorage `emoavatar_debug`
