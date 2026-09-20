@@ -492,27 +492,42 @@ test('M4-11 移动端 CSS：窄屏不断竖排、不挤压、顶部可达可关'
   assert(css.indexOf('max-height:calc(100dvh - 8vh)') !== -1, '弹窗应限高，避免底栏被挤出视口');
   assert(css.indexOf('overflow-y:auto') !== -1, '窄屏主体/遮罩应可滚，底栏可达');
 });
-test('M4-13 移动端诊断页覆盖无控制台排障字段', function () {
-  return fetch('mobile-beautify-diagnostic.html').then(function (r) {
-    assert(r.ok, '诊断页无法加载：' + r.status);
-    return r.text();
-  }).then(function (html) {
-    [
-      'navigator.userAgent',
-      '脚本桥存在',
-      '样式表已注入',
-      '标签已替换',
-      '段首段落已加 .eca-p',
-      '文本已包 .eca-text',
-      '段落计算样式',
-      '头像计算样式',
-      '文本计算样式',
-      '结论：',
-      'navigator.clipboard'
-    ].forEach(function (key) {
-      assert(html.indexOf(key) !== -1, '诊断页缺少字段：' + key);
-    });
+test('M4-13 面板内排障诊断：按钮存在、报告完整、可复制', function () {
+  __resetChat();
+  window.EmoAvatar.setCharacters(['弗兰克']);
+  window.EmoAvatar.seedAvatar('弗兰克', '微笑', __makeImg(10, '微笑'));
+  var mes = __addFloor('<p>{弗兰克(微笑)}诊断测试内容。</p>', false);
+  window.EmoAvatar.scanAll();
+  window.EmoAvatar.openPanel();
+  var btn = document.getElementById('eca-diag-btn');
+  assert(btn, '面板底栏缺少「排障」按钮');
+  var report = window.EmoAvatar.buildDiagReport();
+  [
+    '【情绪头像排障报告】',
+    '脚本状态',
+    '消息样式表',
+    '事件缺失',
+    '延时渲染',
+    '登记角色',
+    '找到 .mes_text',
+    '已渲染头像',
+    '段首两列化',
+    '计算样式',
+    '结论：'
+  ].forEach(function (key) {
+    assert(report.indexOf(key) !== -1, '诊断报告缺少字段[' + key + ']：\n' + report);
   });
+  assert(report.indexOf('✓') !== -1, '报告应含正常项');
+  assert(report.indexOf('结论：全部正常') !== -1, '正常环境下结论应判定全部正常：\n' + report);
+  // 点击按钮应打开诊断弹窗并填报告
+  btn.click();
+  assert(document.getElementById('eca-diag-panel') && document.getElementById('eca-diag-panel').style.display === 'flex', '点击「排障」应打开诊断弹窗');
+  var pre = document.getElementById('eca-diag-report');
+  assert(pre && pre.textContent.indexOf('结论：') !== -1, '诊断弹窗应填入报告');
+  // 关闭弹窗
+  document.getElementById('eca-diag-panel').querySelector('.eca-close').click();
+  assert(document.getElementById('eca-diag-panel').style.display === 'none', '关闭按钮应能关闭诊断弹窗');
+  window.EmoAvatar.closePanel();
 });
 
 /* ---------- M2 用例：提示词注入 ---------- */

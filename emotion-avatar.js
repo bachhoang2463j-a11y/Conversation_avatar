@@ -1071,6 +1071,21 @@
         + '#eca-panel .eca-footer-divider{display:none;}'
         + '#eca-panel .eca-footer-left,#eca-panel .eca-footer-right{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:8px;}'
         + '#eca-panel .eca-size input[type=range]{width:80px;}'
+        + '}'
+        // 排障诊断弹窗（复用羊皮纸骨架）
+        + '#eca-diag-panel{display:none;position:absolute;top:0;left:0;width:100%;min-height:100%;z-index:100003;background:rgba(18,13,8,.7);align-items:flex-start;justify-content:center;padding:4vh 0;box-sizing:border-box;font-size:13px;font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}'
+        + '#eca-diag-panel .eca-modal{width:min(720px,94vw);max-height:calc(100dvh - 8vh);display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee 0%,#f4eddc 45%,#ecdfc7 100%);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45);position:relative;overflow:hidden;}'
+        + '#eca-diag-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;border-bottom:1px solid #ded2bd;background:rgba(246,238,222,.7);font-weight:700;color:#2b1f13;font-size:15px;}'
+        + '#eca-diag-panel .eca-close{background:none;border:1px solid transparent;color:#7d6b56;font-size:18px;cursor:pointer;line-height:1;padding:0 5px;border-radius:5px;}'
+        + '#eca-diag-panel .eca-close:hover{color:#943325;background:rgba(148,51,37,.1);}'
+        + '#eca-diag-panel .eca-diag-body{padding:14px 18px;overflow-y:auto;flex:1 1 auto;min-height:0;}'
+        + '#eca-diag-panel .eca-diag-tip{color:#7d6b56;font-size:12px;margin-bottom:8px;background:rgba(246,237,220,.6);border-left:3px solid #9c7138;padding:6px 12px;border-radius:0 5px 5px 0;}'
+        + '#eca-diag-panel #eca-diag-report{white-space:pre-wrap;word-break:break-all;font-family:Consolas,monospace;font-size:12px;line-height:1.6;background:#fffdf8;border:1px solid #ded2bd;border-radius:8px;padding:12px;margin:0 0 10px;max-height:50vh;overflow-y:auto;color:#2b1f13;}'
+        + '#eca-diag-panel .eca-diag-actions{display:flex;gap:10px;flex-wrap:wrap;}'
+        + '@media (max-width:640px){'
+        + '#eca-diag-panel{overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;}'
+        + '#eca-diag-panel .eca-header{position:sticky;top:0;}'
+        + '#eca-diag-panel .eca-modal{width:96vw;max-height:calc(100dvh - 6vh);}'
         + '}';
 
     function ensurePanelStyles() {
@@ -1338,6 +1353,7 @@
             + '        <span class="eca-size-val" id="eca-size-val"></span></div>'
             + '      <label class="eca-switch" title="输出完成后统一替换头像，流式闪烁时使用"><input type="checkbox" id="eca-delay-render"> 延时渲染</label>'
             + '      <label class="eca-switch" title="勾选切为顶端首行平齐，不勾选为垂直居中"><input type="checkbox" id="eca-top-align"> 置顶</label>'
+            + '      <button class="eca-add eca-add-char" id="eca-diag-btn" title="生成无控制台排障报告">⚙ 排障</button>'
             + '    </div>'
             + '  </div>'
             + '</div>';
@@ -1514,6 +1530,8 @@
             setTopAlign(topAlignCb.checked);
             toast(topAlignCb.checked ? '已切换为顶端首行平齐' : '已切换为垂直居中');
         });
+        const diagBtn = root.querySelector('#eca-diag-btn');
+        if (diagBtn) diagBtn.addEventListener('click', openDiagDialog);
     }
 
     function syncPanelControls() {
@@ -2215,6 +2233,8 @@
         /* 面板桥 */
         openPanel: openPanel,
         closePanel: closePanel,
+        openDiagDialog: openDiagDialog,
+        buildDiagReport: buildDiagReport,
         /* 批量导入桥 */
         autoDetectGrid: autoDetectGrid,
         sliceGridCell: sliceGridCell,
@@ -2223,6 +2243,109 @@
         closeBatchDialog: closeBatchDialog,
         openBatchDialogWithImage: openBatchDialogWithImage,
     };
+
+    // ============================================
+    // 面板内排障诊断（无需控制台）
+    // ============================================
+    function buildDiagReport() {
+        const lines = [];
+        const add = function (ok, name, value) { lines.push((ok ? '✓ ' : '✗ ') + name + '：' + value); };
+        lines.push('【情绪头像排障报告】 v' + VERSION);
+        lines.push('时间：' + new Date().toLocaleString());
+        lines.push('页面：' + topWindow.location.href);
+        lines.push('UA：' + topWindow.navigator.userAgent);
+        lines.push('视口：' + topWindow.innerWidth + '×' + topWindow.innerHeight + '，dpr=' + topWindow.devicePixelRatio);
+        add(!!doc.getElementById('eca-styles'), '消息样式表', doc.getElementById('eca-styles') ? '#eca-styles 已注入' : '未注入');
+        add(!!doc.getElementById('eca-size-style'), '尺寸变量', doc.getElementById('eca-size-style') ? '#eca-size-style 已注入' : '未注入');
+        add(true, '事件缺失', (function () {
+            const keys = ['CHARACTER_MESSAGE_RENDERED', 'MESSAGE_RECEIVED', 'GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'APP_READY', 'CHAT_CHANGED'];
+            const missing = keys.filter(function (k) { return !Env.events[k]; });
+            return missing.length ? missing.join('/') : '无';
+        })());
+        add(true, '延时渲染', settings.delayRender ? '开启' : '关闭');
+        add(true, '登记角色', characters.length + ' 个：' + (characters.join('、') || '（空）'));
+        const mesTexts = doc.querySelectorAll('.mes_text');
+        add(mesTexts.length > 0, '找到 .mes_text', mesTexts.length + ' 个');
+        const avatars = doc.querySelectorAll('.eca-avatar');
+        add(avatars.length > 0, '已渲染头像', avatars.length + ' 个');
+        const placeholders = doc.querySelectorAll('.eca-avatar.eca-placeholder');
+        if (placeholders.length > 0) {
+            add(false, '占位头像', placeholders.length + ' 个（角色未登记/缺图，非 CSS 问题）');
+        }
+        const ps = doc.querySelectorAll('.mes_text p.eca-p');
+        if (avatars.length > 0) {
+            add(ps.length > 0, '段首两列化 p.eca-p', ps.length + ' 个');
+        }
+        if (ps.length > 0) {
+            const p = ps[0];
+            const cs = topWindow.getComputedStyle(p);
+            add(cs.display === 'flex', '计算样式 display', cs.display);
+            lines.push('  alignItems=' + cs.alignItems + '；gap=' + cs.gap);
+            const avatar = p.querySelector(':scope > .eca-avatar');
+            const text = p.querySelector(':scope > .eca-text');
+            if (avatar) {
+                const acs = topWindow.getComputedStyle(avatar);
+                lines.push('  头像：w=' + acs.width + ' h=' + acs.height + ' flex=' + acs.flex);
+            }
+            if (text) {
+                const tcs = topWindow.getComputedStyle(text);
+                lines.push('  文本块：flex=' + tcs.flex + ' borderLeft=' + tcs.borderLeft + ' paddingLeft=' + tcs.paddingLeft);
+            }
+        }
+        const status = topWindow.EmoAvatar && topWindow.EmoAvatar.debugStatus ? topWindow.EmoAvatar.debugStatus() : null;
+        if (status) lines.push('脚本状态：' + JSON.stringify(status));
+        if (dbgBuffer.length > 0) {
+            lines.push('判定链日志（最近 ' + dbgBuffer.length + ' 条）：');
+            dbgBuffer.slice(-30).forEach(function (l) { lines.push('  ' + l); });
+        } else if (!debugOn) {
+            lines.push('提示：判定链日志未开启。如需流式排障，先在控制台执行 EmoAvatar.setDebug(true) 再生成一条消息。');
+        }
+        let verdict = '全部正常';
+        if (!doc.getElementById('eca-styles')) verdict = '样式未注入：检查 #eca-styles 幂等早退或 topWindow 作用域';
+        else if (mesTexts.length === 0) verdict = '页面无 .mes_text：检查酒馆是否已加载消息楼层';
+        else if (avatars.length === 0 && mesTexts.length > 0) {
+            const hasTag = Array.prototype.some.call(mesTexts, function (m) { return m.textContent.indexOf('{') !== -1; });
+            verdict = hasTag ? '消息含 { 标签但未替换：检查角色登记与延时渲染开关' : '消息不含 {角色(情绪)} 标签：AI 未按提示词输出';
+        }
+        else if (placeholders.length > 0) verdict = '头像显示为灰色占位：角色未登记或缺少对应情绪图';
+        else if (avatars.length > 0 && ps.length === 0) verdict = '头像已替换但两列布局未生效：检查 .mes_text 是否使用 p 包裹或 :has() 兼容性';
+        lines.push('结论：' + verdict);
+        return lines.join('\n');
+    }
+
+    function openDiagDialog() {
+        let dlg = doc.getElementById('eca-diag-panel');
+        if (!dlg) {
+            dlg = doc.createElement('div');
+            dlg.id = 'eca-diag-panel';
+            dlg.innerHTML = ''
+                + '<div class="eca-modal">'
+                + '  <div class="eca-header"><span>排障诊断</span><button class="eca-close" title="关闭">×</button></div>'
+                + '  <div class="eca-diag-body">'
+                + '    <div class="eca-diag-tip">报告已生成。复制后发给开发者即可定位，无需控制台。</div>'
+                + '    <pre id="eca-diag-report"></pre>'
+                + '    <div class="eca-diag-actions"><button class="eca-primary" id="eca-diag-copy">复制报告</button>'
+                + '    <button class="eca-primary" id="eca-diag-refresh">重新生成</button></div>'
+                + '  </div>'
+                + '</div>';
+            doc.body.appendChild(dlg);
+            dlg.querySelector('.eca-close').addEventListener('click', function () { dlg.style.display = 'none'; });
+            dlg.addEventListener('click', function (ev) { if (ev.target === dlg) dlg.style.display = 'none'; });
+            dlg.querySelector('#eca-diag-copy').addEventListener('click', function () {
+                const text = dlg.querySelector('#eca-diag-report').textContent;
+                if (topWindow.navigator.clipboard && topWindow.navigator.clipboard.writeText) {
+                    topWindow.navigator.clipboard.writeText(text).then(function () { toast('报告已复制'); }).catch(function () { topWindow.prompt('复制失败，请手动全选：', text); });
+                } else {
+                    topWindow.prompt('请手动复制：', text);
+                }
+            });
+            dlg.querySelector('#eca-diag-refresh').addEventListener('click', function () {
+                dlg.querySelector('#eca-diag-report').textContent = buildDiagReport();
+            });
+        }
+        dlg.querySelector('#eca-diag-report').textContent = buildDiagReport();
+        dlg.style.display = 'flex';
+    }
 
     // ============================================
     // 入口
