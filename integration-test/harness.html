@@ -62,6 +62,9 @@ window.tavern_events = {
   MESSAGE_EDITED: 'message_edited',
   MESSAGE_SWIPED: 'message_swiped',
   MESSAGE_RECEIVED: 'message_received',
+  GENERATION_STARTED: 'generation_started',
+  GENERATION_ENDED: 'generation_ended',
+  GENERATION_STOPPED: 'generation_stopped',
   MORE_MESSAGES_LOADED: 'more_messages_loaded',
   GENERATION_AFTER_COMMANDS: 'generation_after_commands',
 };
@@ -159,7 +162,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.4', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.5', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -345,9 +348,65 @@ test('M1-12 置顶开关：默认居中，打开切顶对齐且持久化', funct
   var cb = document.getElementById('eca-top-align');
   assert(cb, '面板底栏缺少 #eca-top-align 开关');
   assert(cb.checked === false, '开关回填应与状态一致');
+  var delayCb = document.getElementById('eca-delay-render');
+  assert(delayCb && !delayCb.checked, '延时渲染开关应默认关闭');
+  assert(delayCb.compareDocumentPosition(cb) & Node.DOCUMENT_POSITION_FOLLOWING, '延时渲染应位于置顶左侧');
+  assert(delayCb.closest('.eca-footer-actions'), '延时渲染应在底栏操作区');
   assert(cb.closest('.eca-footer-actions'), '开关应在新增分组右侧的 .eca-footer-actions 内');
   window.EmoAvatar.closePanel();
 });
+test('M1-13 延时渲染：完成事件后才替换', function () {
+  __resetChat(); __seedM1();
+  window.EmoAvatar.setDelayRender(true);
+  var mes = __addFloor('{弗兰克(微笑)}延时内容', false);
+  var target = mes.querySelector('.mes_text');
+  target.textContent = '{弗兰克(微笑)}延时内容';
+  return __wait(350).then(function () {
+    assert(!target.querySelector('img.eca-avatar'), '完成事件前不应替换头像');
+    assert(target.textContent.indexOf('{弗兰克(微笑)}') !== -1, '完成事件前应保留原始标签');
+    window.__trigger('message_received', 0);
+    return __wait(300);
+  }).then(function () {
+    assert(target.querySelector('img.eca-avatar'), '完成事件后应替换头像');
+    window.EmoAvatar.setDelayRender(false);
+  });
+});
+test('M1-14 延时渲染：无完成事件时静默兜底', function () {
+  __resetChat(); __seedM1();
+  window.EmoAvatar.setDelayRender(true);
+  var mes = __addFloor('{弗兰克(愤怒)}静默完成', false);
+  mes.querySelector('.mes_text').textContent = '{弗兰克(愤怒)}静默完成';
+  return __wait(1250).then(function () {
+    assert(mes.querySelector('img.eca-avatar'), '静默兜底应最终替换头像');
+    window.EmoAvatar.setDelayRender(false);
+  });
+});
+test('M1-15 已渲染头像随素材覆盖就地更新', function () {
+  __resetChat(); __seedM1();
+  var mes = __addFloor('{弗兰克(微笑)}覆盖前', false);
+  window.EmoAvatar.scanAll();
+  var img = mes.querySelector('img.eca-avatar');
+  assert(img && img.src === __seedUrls['弗兰克_微笑'], '覆盖前头像错误');
+  var next = __makeImg(310, '新头像');
+  window.EmoAvatar.seedAvatar('弗兰克', '微笑', next);
+  window.EmoAvatar.scanAll();
+  assert(mes.querySelector('img.eca-avatar').src === next, '已有头像应就地切换新图');
+});
+test('M1-16 生成中暂停实时替换，结束后统一刷新', function () {
+  __resetChat(); __seedM1();
+  window.EmoAvatar.setDelayRender(false);
+  window.__trigger('generation_started', 'normal', {}, false);
+  var mes = __addFloor('{弗兰克(惊讶)}生成中', false);
+  mes.querySelector('.mes_text').textContent = '{弗兰克(惊讶)}生成中';
+  return __wait(350).then(function () {
+    assert(!mes.querySelector('img.eca-avatar'), '生成中不应提前替换头像');
+    window.__trigger('message_received', 0, 'normal');
+    return __wait(300);
+  }).then(function () {
+    assert(mes.querySelector('img.eca-avatar'), '生成结束后应替换头像');
+  });
+});
+
 test('M4-11 移动端 CSS：窄屏不断竖排、不挤压、顶部可达可关', function () {
   var style = document.getElementById('eca-panel-styles');
   assert(style, '缺少 #eca-panel-styles');
@@ -1051,6 +1110,7 @@ __btn('模拟重渲染(innerHTML重写)', function () {
   __log('已重写最后一楼 innerHTML');
 });
 __btn('触发 CHARACTER_MESSAGE_RENDERED', function () { window.__trigger('character_message_rendered', 0); __log('事件已触发'); });
+__btn('触发 MESSAGE_RECEIVED', function () { window.__trigger('message_received', 0, 'normal'); __log('消息完成事件已触发'); });
 __btn('触发 CHAT_CHANGED', function () { window.__trigger('chat_changed', 'test-chat'); __log('事件已触发'); });
 __btn('清空聊天与注入记录', function () {
   document.getElementById('chat').innerHTML = '';

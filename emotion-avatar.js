@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.4';
+    const VERSION = '0.2.5';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -59,11 +59,52 @@
     };
 
     // ============================================
+    // 打标埋点（排障用）：默认关闭，只记录判定链，不改变任何行为
+    // 打开：EmoAvatar.setDebug(true)；取日志：EmoAvatar.debugLogs()（环形缓冲，
+    // 控制台抓不到 iframe 日志时用）；状态快照：EmoAvatar.debugStatus()
+    // ============================================
+    const LS_DEBUG = 'emoavatar_debug';
+    const DBG_BUFFER_MAX = 500;
+    let debugOn = false;
+    try { debugOn = topWindow.localStorage.getItem(LS_DEBUG) === '1'; } catch (e) { debugOn = false; }
+    let dbgReplaced = 0;
+    const dbgBuffer = [];
+    const dbgCounts = {};
+    const dbgStartedAt = Date.now();
+
+    function dbg() {
+        if (!debugOn) return;
+        try {
+            const line = '[ECA-DBG +' + (Date.now() - dbgStartedAt) + 'ms] ' + Array.prototype.join.call(arguments, ' ');
+            console.log(line);
+            dbgBuffer.push(line);
+            if (dbgBuffer.length > DBG_BUFFER_MAX) dbgBuffer.shift();
+        } catch (e) { /* 埋点异常不得干扰主流程 */ }
+    }
+
+    /** 高频埋点节流：前 5 次 + 每 20 次各记一条，避免逐 token 风暴刷屏 */
+    function dbgHot(key, message) {
+        if (!debugOn) return;
+        const n = (dbgCounts[key] || 0) + 1;
+        dbgCounts[key] = n;
+        if (n <= 5 || n % 20 === 0) dbg(message + '（该状态第 ' + n + ' 次）');
+    }
+
+    /** 计数窗口复位：生成开始/完成时调用，让每轮生成的埋点从 1 开始计 */
+    function dbgReset() {
+        for (let i = 0; i < arguments.length; i++) delete dbgCounts[arguments[i]];
+    }
+
+    function dbgNow() {
+        return (topWindow.performance && topWindow.performance.now) ? topWindow.performance.now() : Date.now();
+    }
+
+    // ============================================
     // 设置与角色登记表（localStorage）
     // groups: [{id, name, enabled, members:[角色名]}]；characters 为拍平索引（isRegistered 等零改动）
     // 组开关只控制提示词注入（角色卡切换用），不影响已渲染头像与素材库
     // ============================================
-    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1', topAlign: false };
+    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1', topAlign: false, delayRender: false };
     let characters = [];
     let groups = [];
     let groupSeq = 1;
@@ -252,6 +293,8 @@
             const img = doc.createElement('img');
             img.className = 'eca-avatar';
             img.src = src;
+            img.loading = 'eager';
+            img.decoding = 'sync';
             img.alt = name + '·' + emotion;
             img.title = name + '（' + emotion + '）';
             img.dataset.ecaName = name;
@@ -266,6 +309,27 @@
         return span;
     }
 
+    /** 已渲染头像只更新自身，避免流式期间重建整段 DOM。 */
+    function syncRenderedAvatars(root) {
+        const scope = root || doc;
+        const list = scope.querySelectorAll('.eca-avatar[data-eca-name][data-eca-emotion]');
+        for (let i = 0; i < list.length; i++) {
+            const avatar = list[i];
+            const src = resolveTag(avatar.dataset.ecaName, avatar.dataset.ecaEmotion);
+            if (src) {
+                if (avatar.tagName !== 'IMG') {
+                    const img = buildAvatarEl(avatar.dataset.ecaName, avatar.dataset.ecaEmotion, src);
+                    avatar.replaceWith(img);
+                } else if (avatar.src !== src) {
+                    avatar.src = src;
+                    avatar.classList.remove('eca-placeholder');
+                }
+            } else if (avatar.tagName === 'IMG') {
+                avatar.replaceWith(buildAvatarEl(avatar.dataset.ecaName, avatar.dataset.ecaEmotion, null));
+            }
+        }
+    }
+
     /** 替换单个文本节点中的全部完整标签；只切分命中片段，其余文本原样保留 */
     function processTextNode(node) {
         const text = node.nodeValue;
@@ -274,6 +338,7 @@
         let match;
         let frag = null;
         let lastIdx = 0;
+        let hits = 0;
         while ((match = TAG_RE.exec(text)) !== null) {
             const name = match[1].trim();
             const emotion = match[2].trim();
@@ -282,10 +347,12 @@
             frag.appendChild(doc.createTextNode(text.slice(lastIdx, match.index)));
             frag.appendChild(buildAvatarEl(name, emotion, resolveTag(name, emotion)));
             lastIdx = match.index + match[0].length;
+            hits++;
         }
         if (frag === null) return;
         frag.appendChild(doc.createTextNode(text.slice(lastIdx)));
         node.parentNode.replaceChild(frag, node);
+        dbgReplaced += hits;
     }
 
     /** 遍历一个 .mes_text 的文本节点（跳过 pre/code），先收集后替换，避免遍历中突变 */
@@ -309,8 +376,9 @@
      * 文字块内部行内流不变，<q>/<em> 不会被拆成并排 flex 项压扁。
      * 幂等：已处理（.eca-p）或头像后无内容则跳过
      */
-    function wrapLeadingAvatarParagraphs() {
-        const list = doc.querySelectorAll('.mes_text p > .eca-avatar:first-child');
+    function wrapLeadingAvatarParagraphs(root) {
+        const scope = root || doc;
+        const list = scope.querySelectorAll('.mes_text p > .eca-avatar:first-child');
         for (let i = 0; i < list.length; i++) {
             const avatar = list[i];
             const p = avatar.parentElement;
@@ -322,58 +390,253 @@
             if (!nodes.length) continue;
             const span = doc.createElement('span');
             span.className = 'eca-text';
+            span.dataset.speaker = avatar.dataset.ecaName || '';
             for (let k = 0; k < nodes.length; k++) span.appendChild(nodes[k]);
             p.appendChild(span);
         }
     }
 
-    /** 幂等全扫：已替换的标签不在文本节点里，重扫无副作用 */
-    function scanAll() {
-        const list = doc.querySelectorAll('.mes_text');
-        for (let i = 0; i < list.length; i++) processMesText(list[i]);
-        wrapLeadingAvatarParagraphs();
+    const STREAM_IDLE_DELAY = 250;
+    const DELAY_COMPLETE_WAIT = 200;
+    const DELAY_FALLBACK_WAIT = 1000;
+    let scanTimer = null;
+    let streamTimer = null;
+    let completeTimer = null;
+    let delayFallbackTimer = null;
+    let streamObserver = null;
+    let generationActive = false;
+    let pendingFullScan = false;
+    const dirtyRoots = new Set();
+
+    function isConnectedToDocument(el) {
+        return !!(el && doc.documentElement && doc.documentElement.contains(el));
     }
 
-    let scanTimer = null;
-    /** 事件触发的重扫，去抖合并（事件可能先于 DOM 更新完成，留一拍再扫） */
+    function findMesTextRoot(node) {
+        if (!node) return null;
+        let el = node.nodeType === 1 ? node : node.parentElement;
+        if (!el) return null;
+        return el.matches('.mes_text') ? el : el.closest('.mes_text');
+    }
+
+    function addMutationRoots(node, roots) {
+        if (!node) return;
+        const root = findMesTextRoot(node);
+        if (root) roots.add(root);
+        if (node.nodeType !== 1) return;
+        if (node.matches('.mes_text')) roots.add(node);
+        const nested = node.querySelectorAll('.mes_text');
+        for (let i = 0; i < nested.length; i++) roots.add(nested[i]);
+    }
+
+    function collectMutationRoots(records) {
+        const roots = new Set();
+        let full = false;
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            addMutationRoots(record.target, roots);
+            for (let k = 0; k < record.addedNodes.length; k++) addMutationRoots(record.addedNodes[k], roots);
+            if (!findMesTextRoot(record.target) && !record.addedNodes.length) full = true;
+        }
+        return { roots: roots, full: full || roots.size === 0 };
+    }
+
+    function scanRoot(root) {
+        if (!isConnectedToDocument(root)) return;
+        const t0 = debugOn ? dbgNow() : 0;
+        const before = dbgReplaced;
+        syncRenderedAvatars(root);
+        processMesText(root);
+        syncRenderedAvatars(root);
+        wrapLeadingAvatarParagraphs(root);
+        if (debugOn) {
+            dbg('scanRoot：实际替换标签 ' + (dbgReplaced - before) + ' 个，耗时 ' + (dbgNow() - t0).toFixed(1) + 'ms，楼层现有头像元素 ' + root.querySelectorAll('.eca-avatar').length + ' 个');
+        }
+    }
+
+    /** 幂等全扫：初始化、切聊天和完成事件使用的全量入口。 */
+    function scanAll() {
+        runPendingScan(true, new Set());
+    }
+
+    function runPendingScan(forceFull, roots) {
+        const observer = streamObserver;
+        if (observer) observer.disconnect();
+        const t0 = debugOn ? dbgNow() : 0;
+        try {
+            if (forceFull) {
+                const list = doc.querySelectorAll('.mes_text');
+                dbg('runPendingScan：全量扫描 .mes_text × ' + list.length);
+                for (let i = 0; i < list.length; i++) scanRoot(list[i]);
+            } else {
+                dbg('runPendingScan：仅扫描脏楼层 × ' + roots.size);
+                roots.forEach(scanRoot);
+            }
+        } finally {
+            if (observer) {
+                const chatEl = doc.getElementById('chat');
+                if (chatEl) observer.observe(chatEl, { childList: true, subtree: true, characterData: true });
+                dbg('runPendingScan：完成，耗时 ' + (dbgNow() - t0).toFixed(1) + 'ms，observer 重挂=' + !!chatEl);
+            }
+        }
+    }
+
+    function flushPendingScan(force) {
+        dbg('flush 进入：force=' + !!force + ' delayRender=' + !!settings.delayRender + ' generationActive=' + generationActive + ' pendingFull=' + pendingFullScan + ' dirty=' + dirtyRoots.size);
+        if (settings.delayRender && !force) {
+            dbg('flush ✗ 延时模式拦截，改走 armDelayFallback');
+            armDelayFallback();
+            return;
+        }
+        if (streamTimer !== null) { clearTimeout(streamTimer); streamTimer = null; }
+        if (completeTimer !== null) { clearTimeout(completeTimer); completeTimer = null; }
+        if (delayFallbackTimer !== null) { clearTimeout(delayFallbackTimer); delayFallbackTimer = null; }
+        if (!pendingFullScan && dirtyRoots.size === 0) {
+            dbg('flush ✗ 脏标记为空，无事可做');
+            return;
+        }
+        const full = pendingFullScan;
+        const roots = new Set(dirtyRoots);
+        pendingFullScan = false;
+        dirtyRoots.clear();
+        dbg('flush ✓ 执行扫描：full=' + full + ' roots=' + roots.size);
+        runPendingScan(full, roots);
+    }
+
+    function armDelayFallback() {
+        if (delayFallbackTimer !== null) clearTimeout(delayFallbackTimer);
+        delayFallbackTimer = setTimeout(function () {
+            delayFallbackTimer = null;
+            dbg('延时兜底触发（静默 ' + DELAY_FALLBACK_WAIT + 'ms）');
+            flushPendingScan(true);
+        }, DELAY_FALLBACK_WAIT);
+        dbgHot('arm', 'armDelayFallback：重置型去抖，流式不停则永不触发');
+    }
+
+    function queueMutationScan(info) {
+        if (info.full) pendingFullScan = true;
+        info.roots.forEach(function (root) { dirtyRoots.add(root); });
+        dbgHot('mut', 'mutation 到达：roots=' + info.roots.size + ' full=' + info.full + ' delayRender=' + !!settings.delayRender + ' generationActive=' + generationActive);
+        if (settings.delayRender) {
+            dbgHot('arm', 'mutation → 延时模式分支：只登记不渲染');
+            armDelayFallback();
+            return;
+        }
+        if (generationActive) {
+            dbgHot('gate', 'mutation → ❌ 生成期闸门拦截（generationActive=true 且 delayRender=false）：本次变更不登记任何定时器，不渲染');
+            return;
+        }
+        if (streamTimer !== null) clearTimeout(streamTimer);
+        streamTimer = setTimeout(function () {
+            streamTimer = null;
+            flushPendingScan(false);
+        }, STREAM_IDLE_DELAY);
+        dbgHot('timer', 'mutation → ' + STREAM_IDLE_DELAY + 'ms 空闲去抖已 arm');
+    }
+
+    /** 事件触发的重扫：正常模式尾部合并，延时模式只登记待处理楼层。 */
     function scheduleScan() {
-        if (scanTimer !== null) return;
+        dbg('scheduleScan 进入：delayRender=' + !!settings.delayRender + ' generationActive=' + generationActive + ' scanTimer=' + (scanTimer !== null));
+        if (settings.delayRender) {
+            pendingFullScan = true;
+            dbg('scheduleScan → 延时模式：只登记待处理');
+            armDelayFallback();
+            return;
+        }
+        if (generationActive) {
+            pendingFullScan = true;
+            dbg('scheduleScan → ❌ 生成期闸门拦截：只登记 pendingFullScan，不设 scanTimer');
+            return;
+        }
+        if (scanTimer !== null) {
+            dbg('scheduleScan → 已有 50ms 定时器，跳过');
+            return;
+        }
         scanTimer = setTimeout(function () {
             scanTimer = null;
             hookStreamObserver();
-            scanAll();
+            pendingFullScan = true;
+            flushPendingScan(false);
         }, 50);
+        dbg('scheduleScan → 50ms 后 flush');
     }
 
-    /** 流式兜底：#chat MutationObserver 节流扫描（自身替换触发的 mutation 幂等无害） */
-    let streamObserver = null;
-    let streamTimer = null;
+    function scheduleCompletionScan() {
+        dbg('完成事件到达：generationActive ' + generationActive + ' → false，pendingFullScan=true，delayRender=' + !!settings.delayRender);
+        generationActive = false;
+        dbgReset('mut', 'gate', 'timer', 'arm');
+        pendingFullScan = true;
+        if (!settings.delayRender) {
+            scheduleScan();
+            return;
+        }
+        if (delayFallbackTimer !== null) { clearTimeout(delayFallbackTimer); delayFallbackTimer = null; }
+        if (completeTimer !== null) clearTimeout(completeTimer);
+        completeTimer = setTimeout(function () {
+            completeTimer = null;
+            flushPendingScan(true);
+        }, DELAY_COMPLETE_WAIT);
+        dbg('完成事件 → 延时模式：' + DELAY_COMPLETE_WAIT + 'ms 后统一 flush');
+    }
+
+    /** 流式观察只收集发生变化的楼层，并在连续更新停止后统一处理。 */
     function hookStreamObserver() {
         if (streamObserver) return;
         const chatEl = doc.getElementById('chat');
-        if (!chatEl) return; // #chat 未就绪时由下次 scheduleScan 重试
-        streamObserver = new MutationObserver(function () {
-            if (streamTimer !== null) return;
-            streamTimer = setTimeout(function () {
-                streamTimer = null;
-                scanAll();
-            }, 250);
+        if (!chatEl) {
+            dbg('hookStreamObserver：#chat 未就绪，本轮不挂载（由下次 scheduleScan 重试）');
+            return; // #chat 未就绪时由下次 scheduleScan 重试
+        }
+        streamObserver = new MutationObserver(function (records) {
+            if (streamObserver === null) return;
+            queueMutationScan(collectMutationRoots(records));
         });
         streamObserver.observe(chatEl, { childList: true, subtree: true, characterData: true });
+        dbg('hookStreamObserver：MutationObserver 已挂载到 #chat');
+    }
+
+    /** 生成开始：置生成期闸门（默认模式与延时模式共用此闸门，见 queueMutationScan 打标） */
+    function onGenerationStarted(type, params, dryRun) {
+        if (dryRun || (type === 'quiet' && !(params && params.quietToLoud))) {
+            dbg('generation_started 忽略：type=' + type + ' dryRun=' + !!dryRun + ' quietToLoud=' + !!(params && params.quietToLoud));
+            return;
+        }
+        dbgReset('mut', 'gate', 'timer', 'arm');
+        generationActive = true;
+        if (streamTimer !== null) {
+            clearTimeout(streamTimer);
+            streamTimer = null;
+            dbg('generation_started：generationActive=true，并清除在途 streamTimer（流式期间的尾部渲染机会被取消）');
+        } else {
+            dbg('generation_started：generationActive=true');
+        }
     }
 
     function hookEvents() {
+        if (debugOn) {
+            const evKeys = ['CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MESSAGE_EDITED', 'MESSAGE_SWIPED',
+                'MORE_MESSAGES_LOADED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED',
+                'GENERATION_STARTED', 'APP_READY', 'CHAT_CHANGED'];
+            const missing = evKeys.filter(function (k) { return !Env.events[k]; });
+            dbg('hookEvents v' + VERSION + '：宿主事件缺失=' + (missing.length ? missing.join('/') : '无')
+                + '；delayRender=' + !!settings.delayRender + '；#chat=' + !!doc.getElementById('chat'));
+        }
         [
             'CHARACTER_MESSAGE_RENDERED',
             'USER_MESSAGE_RENDERED',
             'MESSAGE_EDITED',
             'MESSAGE_SWIPED',
-            'MESSAGE_RECEIVED',
             'MORE_MESSAGES_LOADED',
         ].forEach(function (key) {
             const ev = Env.events[key];
             if (ev) Env.on(ev, scheduleScan);
         });
+        ['MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED'].forEach(function (key) {
+            const ev = Env.events[key];
+            if (ev) Env.on(ev, scheduleCompletionScan);
+        });
+        const generationStarted = Env.events.GENERATION_STARTED;
+        if (generationStarted) Env.on(generationStarted, onGenerationStarted);
         const appReady = Env.events.APP_READY;
         if (appReady) Env.on(appReady, function () { addMenuButton(); scheduleScan(); });
         // CHAT_CHANGED：注入只对当前聊天有效，切聊天必须重注；同时全扫恢复渲染
@@ -486,7 +749,6 @@
             persistSettings();
             applySizeVar();
             syncPanelControls();
-            updateSizePreview();
         }
     }
 
@@ -511,6 +773,24 @@
         settings.topAlign = !!topAlign;
         persistSettings();
         applyAlignMode();
+        syncPanelControls();
+    }
+
+    /** 延时渲染开关：流式期间只保留原始标签，完成或静默超时后统一替换。 */
+    function setDelayRender(delayRender) {
+        settings.delayRender = !!delayRender;
+        persistSettings();
+        dbg('setDelayRender → ' + settings.delayRender + '；generationActive=' + generationActive + ' dirty=' + dirtyRoots.size);
+        if (settings.delayRender) {
+            if (scanTimer !== null) { clearTimeout(scanTimer); scanTimer = null; }
+            if (streamTimer !== null) { clearTimeout(streamTimer); streamTimer = null; }
+            pendingFullScan = true;
+            armDelayFallback();
+        } else {
+            if (delayFallbackTimer !== null) { clearTimeout(delayFallbackTimer); delayFallbackTimer = null; }
+            pendingFullScan = true;
+            flushPendingScan(true);
+        }
         syncPanelControls();
     }
 
@@ -553,7 +833,7 @@
         });
     }
 
-    /** 保存并同步更新内存缓存（覆盖时 revoke 旧 URL） */
+    /** 保存并同步更新内存缓存（覆盖时先回写楼层，再 revoke 旧 URL） */
     function saveAvatar(character, emotion, blob) {
         const id = character + '_' + emotion;
         return txStore('readwrite').then(function (store) {
@@ -566,9 +846,12 @@
                     lastModified: Date.now(),
                 });
                 request.onsuccess = function () {
-                    revokeCacheUrl(avatarCache.get(id));
-                    avatarCache.set(id, createBlobUrl(blob));
+                    const oldUrl = avatarCache.get(id);
+                    const nextUrl = createBlobUrl(blob);
+                    avatarCache.set(id, nextUrl);
                     allEmotions.add(emotion);
+                    syncRenderedAvatars(doc);
+                    revokeCacheUrl(oldUrl);
                     resolve();
                 };
                 request.onerror = function () { reject(request.error); };
@@ -582,8 +865,10 @@
             return new Promise(function (resolve, reject) {
                 const request = store.delete(id);
                 request.onsuccess = function () {
-                    revokeCacheUrl(avatarCache.get(id));
+                    const oldUrl = avatarCache.get(id);
                     avatarCache.delete(id);
+                    syncRenderedAvatars(doc);
+                    revokeCacheUrl(oldUrl);
                     resolve();
                 };
                 request.onerror = function () { reject(request.error); };
@@ -608,11 +893,13 @@
                 const request = store.index('character').getAllKeys(character);
                 request.onsuccess = function () {
                     const keys = request.result || [];
+                    const oldUrls = keys.map(function (key) { return avatarCache.get(key); });
                     keys.forEach(function (key) {
-                        revokeCacheUrl(avatarCache.get(key));
                         avatarCache.delete(key);
                         store.delete(key);
                     });
+                    syncRenderedAvatars(doc);
+                    oldUrls.forEach(revokeCacheUrl);
                     resolve(keys.length);
                 };
                 request.onerror = function () { reject(request.error); };
@@ -660,7 +947,9 @@
         + '#eca-panel .eca-header,#eca-batch-panel .eca-header{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;border-bottom:1px solid #ded2bd;background:rgba(246,238,222,.7);position:relative;z-index:2;font-weight:700;color:#2b1f13;font-family:"Cinzel","STSong","Songti SC","Noto Serif SC",Georgia,serif;font-size:15px;letter-spacing:.02em;}'
         + '#eca-panel .eca-close,#eca-batch-panel .eca-close{background:none;border:1px solid transparent;color:#7d6b56;font-size:18px;cursor:pointer;line-height:1;padding:0 5px;border-radius:5px;transition:all .15s ease;}'
         + '#eca-panel .eca-close:hover,#eca-batch-panel .eca-close:hover{color:#943325;background:rgba(148,51,37,.1);border-color:rgba(148,51,37,.25);}'
-        + '#eca-panel .eca-footer,#eca-batch-panel .eca-footer{display:flex;align-items:center;gap:16px;padding:10px 18px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);flex-wrap:wrap;position:relative;z-index:2;font-size:13px;}'
+        + '#eca-panel .eca-footer,#eca-batch-panel .eca-footer{display:flex;align-items:center;padding:8px 16px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);position:relative;z-index:2;font-size:13px;min-height:44px;box-sizing:border-box;}'
+        + '#eca-panel .eca-footer{justify-content:space-between;gap:12px;flex-wrap:nowrap;}'
+        + '#eca-batch-panel .eca-footer{gap:16px;flex-wrap:wrap;padding:10px 18px;}'
         // 管理面板主体
         + '#eca-panel .eca-body{display:flex;min-height:360px;max-height:calc(100vh - 220px);max-height:calc(100dvh - 220px);overflow:hidden;position:relative;z-index:1;}'
         + '#eca-panel .eca-side{width:210px;flex:0 0 210px;border-right:1px solid #ded2bd;background:rgba(244,235,218,.55);padding:10px 10px 8px;display:flex;flex-direction:column;gap:6px;min-height:0;}'
@@ -673,10 +962,11 @@
         + '#eca-panel .eca-char-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#493725;}'
         + '#eca-panel .eca-char-del{background:none;border:0;color:#9d8c78;cursor:pointer;font-size:11px;padding:1px 3px;border-radius:3px;opacity:.6;transition:all .12s ease;}'
         + '#eca-panel .eca-char-del:hover{color:#943325;background:rgba(148,51,37,.12);opacity:1;}'
-        // 底栏常驻按键区
-        + '#eca-panel .eca-footer-actions{display:flex;align-items:center;gap:8px;margin-left:18px;}'
-        + '#eca-panel .eca-footer-actions .eca-switch{white-space:nowrap;}'
-        + '#eca-panel .eca-add{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;text-shadow:0 1px 0 rgba(255,255,255,.7);user-select:none;white-space:nowrap;}'
+        // 底栏双区布局与分割线
+        + '#eca-panel .eca-footer-left{display:flex;align-items:center;gap:8px;flex:0 0 auto;}'
+        + '#eca-panel .eca-footer-divider{width:1px;height:18px;background:#ded2bd;flex:0 0 auto;margin:0 2px;}'
+        + '#eca-panel .eca-footer-right{display:flex;align-items:center;gap:12px;flex:1 1 auto;justify-content:flex-end;white-space:nowrap;}'
+        + '#eca-panel .eca-add{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;text-shadow:0 1px 0 rgba(255,255,255,.7);user-select:none;white-space:nowrap;}'
         + '#eca-panel .eca-add.eca-add-char{background:linear-gradient(180deg,#fefaf0 0%,#ebe0c8 100%);border:1px solid #c3984d;color:#2b1f13;box-shadow:0 1px 3px rgba(110,75,30,.15),inset 0 1px 0 #fff;}'
         + '#eca-panel .eca-add.eca-add-char:hover{background:linear-gradient(180deg,#fffdf8 0%,#f4e8d0 100%);border-color:#9c7138;transform:translateY(-1px);box-shadow:0 2px 6px rgba(156,113,56,.25);}'
         + '#eca-panel .eca-add.eca-add-group{background:rgba(245,237,222,.7);border:1px solid #ded2bd;color:#6d5b46;box-shadow:0 1px 2px rgba(60,40,20,.05);}'
@@ -730,11 +1020,10 @@
         + '#eca-panel .eca-char-alias{flex:0 0 auto;color:#9c7138;font-size:10px;background:rgba(195,152,77,.16);border-radius:8px;padding:0 5px;}'
         // 底栏控件
         + '#eca-panel .eca-switch{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-weight:500;color:#2b1f13;}'
-        + '#eca-panel .eca-switch input{accent-color:#3f684c;cursor:pointer;}'
-        + '#eca-panel .eca-size{display:flex;align-items:center;gap:8px;color:#493725;}'
-        + '#eca-panel .eca-size input[type=range]{width:120px;accent-color:#9c7138;cursor:pointer;}'
-        + '#eca-panel .eca-size-val{min-width:3.5em;color:#9c7138;font-weight:600;font-family:Consolas,monospace;}'
-        + '#eca-panel .eca-size-preview{margin-left:auto;display:flex;align-items:center;gap:8px;color:#7d6b56;font-size:12px;}'
+        + '#eca-panel .eca-switch input{accent-color:#3f684c;cursor:pointer;margin:0;}'
+        + '#eca-panel .eca-size{display:flex;align-items:center;gap:6px;color:#493725;font-size:12px;white-space:nowrap;}'
+        + '#eca-panel .eca-size input[type=range]{width:95px;accent-color:#9c7138;cursor:pointer;margin:0;}'
+        + '#eca-panel .eca-size-val{min-width:3.2em;color:#9c7138;font-weight:600;font-family:Consolas,monospace;}'
         // 批量导入对话框（羊皮纸风格）
         + '#eca-batch-panel .eca-batch-body{padding:14px 18px;overflow-y:auto;}'
         + '#eca-batch-panel .eca-batch-canvas-wrap{background:rgba(255,255,255,.5);border:2px dashed #b8a584;border-radius:8px;padding:12px;text-align:center;cursor:pointer;transition:all .15s ease;}'
@@ -776,10 +1065,10 @@
         + '#eca-panel .eca-detail{padding:12px;}'
         + '#eca-panel .eca-grid{grid-template-columns:repeat(3,1fr);gap:8px;}'
         + '#eca-panel .eca-cell-name{font-size:11px;}'
-        + '#eca-panel .eca-footer{gap:10px;padding:10px 12px;}'
-        + '#eca-panel .eca-footer-actions{margin-left:0;flex-wrap:wrap;}'
-        + '#eca-panel .eca-size input[type=range]{width:90px;}'
-        + '#eca-panel .eca-size-preview{margin-left:0;width:100%;justify-content:flex-end;}'
+        + '#eca-panel .eca-footer{flex-wrap:wrap;gap:8px;padding:8px 12px;min-height:auto;}'
+        + '#eca-panel .eca-footer-divider{display:none;}'
+        + '#eca-panel .eca-footer-left,#eca-panel .eca-footer-right{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:8px;}'
+        + '#eca-panel .eca-size input[type=range]{width:80px;}'
         + '}';
 
     function ensurePanelStyles() {
@@ -1035,16 +1324,19 @@
             + '    <div class="eca-detail" id="eca-detail"></div>'
             + '  </div>'
             + '  <div class="eca-footer">'
-            + '    <label class="eca-switch"><input type="checkbox" id="eca-enabled"> 启用提示词注入</label>'
-            + '    <div class="eca-size"><span>头像大小</span>'
-            + '      <input type="range" id="eca-size-range" min="1.5" max="5" step="0.1">'
-            + '      <span class="eca-size-val" id="eca-size-val"></span></div>'
-            + '    <div class="eca-footer-actions">'
+            + '    <div class="eca-footer-left">'
             + '      <button class="eca-add eca-add-char" id="eca-add-char">＋ 新增角色</button>'
             + '      <button class="eca-add eca-add-group" id="eca-add-group">＋ 新增分组</button>'
+            + '    </div>'
+            + '    <div class="eca-footer-divider"></div>'
+            + '    <div class="eca-footer-right eca-footer-actions">'
+            + '      <label class="eca-switch" title="开启后将头像标记规则注入酒馆上下文"><input type="checkbox" id="eca-enabled"> 启用提示词注入</label>'
+            + '      <div class="eca-size"><span>头像大小</span>'
+            + '        <input type="range" id="eca-size-range" min="1.5" max="5" step="0.1">'
+            + '        <span class="eca-size-val" id="eca-size-val"></span></div>'
+            + '      <label class="eca-switch" title="输出完成后统一替换头像，流式闪烁时使用"><input type="checkbox" id="eca-delay-render"> 延时渲染</label>'
             + '      <label class="eca-switch" title="勾选切为顶端首行平齐，不勾选为垂直居中"><input type="checkbox" id="eca-top-align"> 置顶</label>'
             + '    </div>'
-            + '    <div class="eca-size-preview" id="eca-size-preview"></div>'
             + '  </div>'
             + '</div>';
         fileInputEl = doc.createElement('input');
@@ -1209,7 +1501,11 @@
         range.addEventListener('input', function () {
             setSize(parseFloat(range.value));
             syncPanelControls();
-            updateSizePreview();
+        });
+        const delayRenderCb = root.querySelector('#eca-delay-render');
+        delayRenderCb.addEventListener('change', function () {
+            setDelayRender(delayRenderCb.checked);
+            toast(delayRenderCb.checked ? '已开启延时渲染，输出完成后替换头像' : '已关闭延时渲染，恢复实时替换');
         });
         const topAlignCb = root.querySelector('#eca-top-align');
         topAlignCb.addEventListener('change', function () {
@@ -1218,39 +1514,12 @@
         });
     }
 
-    function buildSizePreviewEl() {
-        let sample = null;
-        if (selectedCharacter) {
-            const candidates = EMOTIONS.concat(getCustomEmotions(selectedCharacter));
-            for (let i = 0; i < candidates.length; i++) {
-                const src = avatarCache.get(selectedCharacter + '_' + candidates[i]);
-                if (src) { sample = src; break; }
-            }
-        }
-        if (sample) {
-            const img = doc.createElement('img');
-            img.className = 'eca-avatar';
-            img.src = sample;
-            img.alt = '预览';
-            return img;
-        }
-        const span = doc.createElement('span');
-        span.className = 'eca-avatar eca-placeholder';
-        return span;
-    }
-
-    function updateSizePreview() {
-        if (!panelEl) return;
-        const box = panelEl.querySelector('#eca-size-preview');
-        if (!box) return;
-        box.textContent = '预览 ';
-        box.appendChild(buildSizePreviewEl());
-    }
-
     function syncPanelControls() {
         if (!panelEl) return;
         const cb = panelEl.querySelector('#eca-enabled');
         if (cb) cb.checked = settings.enabled;
+        const delayRenderCb = panelEl.querySelector('#eca-delay-render');
+        if (delayRenderCb) delayRenderCb.checked = !!settings.delayRender;
         const topAlignCb = panelEl.querySelector('#eca-top-align');
         if (topAlignCb) topAlignCb.checked = !!settings.topAlign;
         const range = panelEl.querySelector('#eca-size-range');
@@ -1327,7 +1596,6 @@
                 + '<div class="eca-grid">' + cells + '</div>';
         }
         syncPanelControls();
-        updateSizePreview();
     }
 
     function openPanel() {
@@ -1847,6 +2115,47 @@
     topWindow.EmoAvatar = {
         version: VERSION,
         emotions: EMOTIONS.slice(),
+        /* 打标埋点桥（排障检测用，默认关闭，不改变行为） */
+        setDebug(on) {
+            debugOn = !!on;
+            try { topWindow.localStorage.setItem(LS_DEBUG, debugOn ? '1' : '0'); } catch (e) { /* 存储不可用时仅本次会话生效 */ }
+            dbg('打标 ' + (debugOn ? '开启' : '关闭') + '（v' + VERSION + '）');
+            return debugOn;
+        },
+        getDebug() { return debugOn; },
+        /** 打标快照：判定链关键状态一次取全 */
+        debugStatus() {
+            return {
+                version: VERSION,
+                debug: debugOn,
+                delayRender: !!settings.delayRender,
+                generationActive: generationActive,
+                pendingFullScan: pendingFullScan,
+                dirtyRoots: dirtyRoots.size,
+                timers: {
+                    scan: scanTimer !== null,
+                    stream: streamTimer !== null,
+                    complete: completeTimer !== null,
+                    delayFallback: delayFallbackTimer !== null,
+                },
+                observerAttached: streamObserver !== null,
+                hasChat: !!doc.getElementById('chat'),
+            };
+        },
+        /** 打标日志环形缓冲（控制台抓不到 iframe 日志时取这里）；clear=true 取完清空 */
+        debugLogs(clear) {
+            const copy = dbgBuffer.slice();
+            if (clear) dbgBuffer.length = 0;
+            return copy;
+        },
+        /** 合成事件喂给与真实事件完全相同的处理函数（不触碰聊天数据），仅供检测 */
+        debugEmit(name, args) {
+            const a = args || [];
+            if (name === 'generation_started') { onGenerationStarted(a[0], a[1], a[2]); return true; }
+            if (name === 'completion') { scheduleCompletionScan(); return true; }
+            if (name === 'scan') { scheduleScan(); return true; }
+            return false;
+        },
         /** 调试/harness 桥：直接向内存缓存塞头像（不落库） */
         seedAvatar(name, emotion, src) { allEmotions.add(emotion); avatarCache.set(name + '_' + emotion, src); },
         /** 调试/harness 桥：整体替换登记名单（不落 localStorage，但会同步重注提示词） */
@@ -1859,6 +2168,7 @@
         setEnabled: setEnabled,
         setSize: setSize,
         setTopAlign: setTopAlign,
+        setDelayRender: setDelayRender,
         scanAll: scanAll,
         applyInjection: applyInjection,
         /* 存储层桥（面板与 harness 共用） */
@@ -1869,9 +2179,12 @@
         getAllAvatarRecords: getAllAvatarRecords,
         preloadAvatars: preloadAvatars,
         clearMemoryCache() {
-            avatarCache.forEach(function (url) { revokeCacheUrl(url); });
+            const oldUrls = [];
+            avatarCache.forEach(function (url) { oldUrls.push(url); });
             avatarCache.clear();
             allEmotions = new Set(EMOTIONS);
+            syncRenderedAvatars(doc);
+            oldUrls.forEach(revokeCacheUrl);
         },
         /* 登记操作桥（持久化） */
         setCharactersPersist(list) {
@@ -1920,9 +2233,11 @@
         addMenuButton();
         hookEvents();
         applyInjection();
-        scanAll();
-        // 预热完成后重注提示词（自定义情绪依赖缓存）并重扫，让已有楼层换上真实头像
-        preloadAvatars().then(function () { applyInjection(); scanAll(); });
+        // 先预热素材，再首次扫描，避免启动时先生成无法升级的占位头像。
+        preloadAvatars().then(function () {
+            applyInjection();
+            scanAll();
+        });
     }
     if (doc.readyState === 'loading') {
         doc.addEventListener('DOMContentLoaded', init, { once: true });
