@@ -70,7 +70,10 @@ window.tavern_events = {
 };
 const __listeners = {};
 window.eventOn = function (ev, fn) { (__listeners[ev] = __listeners[ev] || []).push(fn); };
-window.__trigger = function (ev, arg) { (__listeners[ev] || []).forEach(function (f) { try { f(arg); } catch (e) { console.error('[stub listener]', ev, e); } }); };
+window.__trigger = function (ev) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  (__listeners[ev] || []).forEach(function (f) { try { f.apply(null, args); } catch (e) { console.error('[stub listener]', ev, e); } });
+};
 
 window.__injectCalls = [];
 window.injectPrompts = function (prompts, options) {
@@ -162,7 +165,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.5', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.2.6', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -392,18 +395,59 @@ test('M1-15 已渲染头像随素材覆盖就地更新', function () {
   window.EmoAvatar.scanAll();
   assert(mes.querySelector('img.eca-avatar').src === next, '已有头像应就地切换新图');
 });
-test('M1-16 生成中暂停实时替换，结束后统一刷新', function () {
+test('M1-16 生成中按节流窗口实时替换（未开延时渲染）', function () {
   __resetChat(); __seedM1();
   window.EmoAvatar.setDelayRender(false);
   window.__trigger('generation_started', 'normal', {}, false);
-  var mes = __addFloor('{弗兰克(惊讶)}生成中', false);
-  mes.querySelector('.mes_text').textContent = '{弗兰克(惊讶)}生成中';
-  return __wait(350).then(function () {
-    assert(!mes.querySelector('img.eca-avatar'), '生成中不应提前替换头像');
+  var mes = __addFloor('', false);
+  var target = mes.querySelector('.mes_text');
+  var inserted = 0;
+  var obs = new MutationObserver(function (records) {
+    records.forEach(function (r) {
+      Array.prototype.forEach.call(r.addedNodes, function (n) {
+        if (n.nodeType === 1 && n.classList.contains('eca-avatar')) inserted++;
+      });
+    });
+  });
+  obs.observe(document.getElementById('chat'), { childList: true, subtree: true });
+  target.textContent = '{弗兰克(惊讶)}生成中';
+  return __wait(400).then(function () {
+    assert(inserted === 1, '生成中应实时替换且只插入 1 次，实际 ' + inserted + ' 次');
+    assert(target.querySelectorAll('img.eca-avatar').length === 1, '生成中应已渲染头像');
     window.__trigger('message_received', 0, 'normal');
     return __wait(300);
   }).then(function () {
-    assert(mes.querySelector('img.eca-avatar'), '生成结束后应替换头像');
+    assert(target.querySelectorAll('img.eca-avatar').length === 1, '结束后重扫应幂等');
+    assert(inserted === 1, '结束后不应再插入头像，实际 ' + inserted + ' 次');
+    obs.disconnect();
+  });
+});
+test('M1-17 连续逐 token 变更：节流窗口内即渲染，不等空闲', function () {
+  __resetChat(); __seedM1();
+  window.__trigger('generation_started', 'normal', {}, false);
+  var mes = __addFloor('', false);
+  var target = mes.querySelector('.mes_text');
+  var full = '{弗兰克(害羞)}他移开了视线。';
+  var inserted = 0;
+  var obs = new MutationObserver(function (records) {
+    records.forEach(function (r) {
+      Array.prototype.forEach.call(r.addedNodes, function (n) {
+        if (n.nodeType === 1 && n.classList.contains('eca-avatar')) inserted++;
+      });
+    });
+  });
+  obs.observe(document.getElementById('chat'), { childList: true, subtree: true });
+  var i = 0;
+  var timer = setInterval(function () {
+    i += 2;
+    target.textContent = full.slice(0, i);
+    if (i >= full.length) clearInterval(timer);
+  }, 50);
+  return __wait(700).then(function () {
+    clearInterval(timer);
+    obs.disconnect();
+    assert(inserted >= 1, '连续变更期间应至少渲染一次头像（50ms 间隔变更不得让窗口反复顺延），实际 ' + inserted + ' 次');
+    assert(target.querySelector('img.eca-avatar'), '流式结束后楼层应停着头像');
   });
 });
 

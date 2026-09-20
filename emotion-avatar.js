@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.5';
+    const VERSION = '0.2.6';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -404,6 +404,7 @@
     let completeTimer = null;
     let delayFallbackTimer = null;
     let streamObserver = null;
+    /** 宿主生成状态：由 GENERATION_STARTED / 完成事件维护，用于打标与状态快照 */
     let generationActive = false;
     let pendingFullScan = false;
     const dirtyRoots = new Set();
@@ -522,30 +523,24 @@
             armDelayFallback();
             return;
         }
-        if (generationActive) {
-            dbgHot('gate', 'mutation → ❌ 生成期闸门拦截（generationActive=true 且 delayRender=false）：本次变更不登记任何定时器，不渲染');
+        if (streamTimer !== null) {
+            dbgHot('timer', 'mutation → 并入在途 ' + STREAM_IDLE_DELAY + 'ms 节流窗口');
             return;
         }
-        if (streamTimer !== null) clearTimeout(streamTimer);
         streamTimer = setTimeout(function () {
             streamTimer = null;
             flushPendingScan(false);
         }, STREAM_IDLE_DELAY);
-        dbgHot('timer', 'mutation → ' + STREAM_IDLE_DELAY + 'ms 空闲去抖已 arm');
+        dbgHot('timer', 'mutation → 开启 ' + STREAM_IDLE_DELAY + 'ms 节流窗口，到点渲染脏楼层');
     }
 
-    /** 事件触发的重扫：正常模式尾部合并，延时模式只登记待处理楼层。 */
+    /** 事件触发的重扫：正常模式 50ms 尾部合并，延时模式只登记待处理楼层。 */
     function scheduleScan() {
         dbg('scheduleScan 进入：delayRender=' + !!settings.delayRender + ' generationActive=' + generationActive + ' scanTimer=' + (scanTimer !== null));
         if (settings.delayRender) {
             pendingFullScan = true;
             dbg('scheduleScan → 延时模式：只登记待处理');
             armDelayFallback();
-            return;
-        }
-        if (generationActive) {
-            pendingFullScan = true;
-            dbg('scheduleScan → ❌ 生成期闸门拦截：只登记 pendingFullScan，不设 scanTimer');
             return;
         }
         if (scanTimer !== null) {
@@ -564,7 +559,7 @@
     function scheduleCompletionScan() {
         dbg('完成事件到达：generationActive ' + generationActive + ' → false，pendingFullScan=true，delayRender=' + !!settings.delayRender);
         generationActive = false;
-        dbgReset('mut', 'gate', 'timer', 'arm');
+        dbgReset('mut', 'timer', 'arm');
         pendingFullScan = true;
         if (!settings.delayRender) {
             scheduleScan();
@@ -579,7 +574,7 @@
         dbg('完成事件 → 延时模式：' + DELAY_COMPLETE_WAIT + 'ms 后统一 flush');
     }
 
-    /** 流式观察只收集发生变化的楼层，并在连续更新停止后统一处理。 */
+    /** 流式观察只收集发生变化的楼层，按节流窗口统一处理（延时模式只登记）。 */
     function hookStreamObserver() {
         if (streamObserver) return;
         const chatEl = doc.getElementById('chat');
@@ -595,20 +590,20 @@
         dbg('hookStreamObserver：MutationObserver 已挂载到 #chat');
     }
 
-    /** 生成开始：置生成期闸门（默认模式与延时模式共用此闸门，见 queueMutationScan 打标） */
+    /** 生成开始：登记生成状态；延时模式下顺带取消在途的实时渲染窗口 */
     function onGenerationStarted(type, params, dryRun) {
         if (dryRun || (type === 'quiet' && !(params && params.quietToLoud))) {
             dbg('generation_started 忽略：type=' + type + ' dryRun=' + !!dryRun + ' quietToLoud=' + !!(params && params.quietToLoud));
             return;
         }
-        dbgReset('mut', 'gate', 'timer', 'arm');
+        dbgReset('mut', 'timer', 'arm');
         generationActive = true;
-        if (streamTimer !== null) {
+        if (settings.delayRender && streamTimer !== null) {
             clearTimeout(streamTimer);
             streamTimer = null;
-            dbg('generation_started：generationActive=true，并清除在途 streamTimer（流式期间的尾部渲染机会被取消）');
+            dbg('generation_started：generationActive=true；延时模式，清除在途 streamTimer（生成期间不渲染）');
         } else {
-            dbg('generation_started：generationActive=true');
+            dbg('generation_started：generationActive=true（默认模式流式期间照常按节流窗口实时渲染）');
         }
     }
 
