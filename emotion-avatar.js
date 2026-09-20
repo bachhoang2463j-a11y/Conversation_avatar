@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.9';
+    const VERSION = '0.2.10';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -384,7 +384,7 @@
      * 标签行拆段：酒馆 showdown 开启 simpleLineBreaks 后，标签前只有单换行（无空行）
      * 时标签会留在同一 <p> 里、前面隔一个 <br>，导致头像不满足
      * `p > .eca-avatar:first-child`，两列布局失效。这里把「行首是头像」的视觉行
-     * 从原 <p> 拆出成独立 <p>（前后切点 <br> 由段边界替代，段内 <br> 保留），
+     * 从原 <p> 拆出成独立 <p>（前后切点 <br> 从文档删除、由段边界替代，段内 <br> 保留），
      * 使双列单元只含标签行本身，标签行之后同段的内容（无标签行）排除出右列、
      * 独立成段；行内文字中的标签（前面无换行）不拆。
      * 随后交给 wrapLeadingAvatarParagraphs 走既有两列逻辑。
@@ -417,20 +417,23 @@
             }
             if (seg.length) segs.push(seg);
             if (segs.length < 2) continue;
-            const firstLast = segs[0][segs[0].length - 1];
-            const cutBr = firstLast[firstLast.length - 1];
-            if (cutBr && cutBr.nodeType === 1 && cutBr.tagName === 'BR') cutBr.parentNode.removeChild(cutBr);
+            // 段边界：删除每段（除最后一段）末尾行末尾的 <br>，由段边界替代换行
+            for (let s = 0; s < segs.length - 1; s++) {
+                const segLastRow = segs[s][segs[s].length - 1];
+                const cutBr = segLastRow[segLastRow.length - 1];
+                if (cutBr && cutBr.nodeType === 1 && cutBr.tagName === 'BR' && cutBr.parentNode) {
+                    cutBr.parentNode.removeChild(cutBr);
+                }
+            }
             let anchor = p;
             for (let s = 1; s < segs.length; s++) {
                 const np = doc.createElement('p');
                 const segRows = segs[s];
                 for (let r = 0; r < segRows.length; r++) {
                     const nodes = segRows[r];
-                    const lastRow = r === segRows.length - 1;
                     for (let k = 0; k < nodes.length; k++) {
                         const nd = nodes[k];
-                        if (lastRow && k === nodes.length - 1 && s < segs.length - 1
-                            && nd.nodeType === 1 && nd.tagName === 'BR') continue;
+                        if (!nd.parentNode) continue; // 上面已删除的切点 <br>
                         np.appendChild(nd);
                     }
                 }
