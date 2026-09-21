@@ -127,10 +127,10 @@
     /** 长按头像清缓存重生成：触摸与鼠标同判定（按住不动 600ms），位移超阈值即取消 */
     const LONG_PRESS_MS = 600;
     const LONG_PRESS_MOVE_PX = 10;
-    /** 长按后抑制随后的 click，避免顶着「点击播放」再跑一次 */
-    const LONG_PRESS_CLICK_GUARD_MS = 800;
     /** 同引擎失败自动重试一次（间隔 500ms）：只吸收网络抖动，不切换引擎、不改并发策略 */
     const TTS_RETRY_DELAY_MS = 500;
+    /** 重复加载检测标记：同一页面加载两份脚本会让两套状态抢同一批头像 */
+    const INSTANCE_FLAG = '__emotionAvatarInstance';
     const EDGE_EMOTION_STYLES = {
         '默认': 'general', '微笑': 'cheerful', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'cheerful',
         '轻蔑': 'disgruntled', '杀意': 'serious', '思考': 'calm', '大笑': 'cheerful', '害羞': 'affectionate',
@@ -187,13 +187,26 @@
     let longPressTarget = null;
     let longPressStartX = 0;
     let longPressStartY = 0;
-    let longPressFiredAt = 0;
+    /** 长按已触发：在这次手势结束前到达的 click 都是长按的回响，不能当成播放/停止 */
+    let longPressEcho = false;
+    /** 上一次加载的实例版本（重复加载时用于告警），null 表示干净 */
+    let previousInstance = null;
+    /** 本实例挂到 topWindow 的桥对象：与 topWindow.EmoAvatar 不一致即说明被后加载的另一份脚本顶掉了 */
+    let bridgeRef = null;
 
     // ============================================
     // 运行环境（酒馆助手脚本运行在 iframe 内，DOM/样式走顶层窗口）
     // ============================================
     const topWindow = typeof window.parent !== 'undefined' ? window.parent : window;
     const doc = topWindow.document;
+    // 同一页面加载两份脚本（旧版本没删干净／重复导入）会让两套状态抢同一批头像：
+    // 表现为「点一下直接就出声、不进入加载态」「长按重生成像没反应」这类错乱，
+    // 这里在覆盖桥对象之前先记下来，init 时告警。
+    try {
+        const bridge = topWindow.EmoAvatar;
+        previousInstance = topWindow[INSTANCE_FLAG] || (bridge && bridge.version ? String(bridge.version) : null);
+        topWindow[INSTANCE_FLAG] = VERSION;
+    } catch (e) { previousInstance = null; }
     const Env = {
         events: (typeof tavern_events !== 'undefined') ? tavern_events : (topWindow.tavern_events || {}),
         on(event, fn) {
@@ -947,18 +960,25 @@
         }).catch(function () { return undefined; });
     }
 
-    /** 取音频：内存 → 持久化 → 真正合成；命中任一层都不再消耗合成额度 */
-    function getOrCreateAudio(text, request) {
+    /**
+     * 取音频：内存 → 持久化 → 真正合成；命中任一层都不再消耗合成额度。
+     * options.force = true 时跳过两层缓存的读取，直接重新请求（长按清缓存重生成走这条）。
+     */
+    function getOrCreateAudio(text, request, options) {
         const key = buildTtsKey(request);
-        if (ttsMemoryCache.has(key)) {
-            const hit = ttsMemoryCache.get(key);
-            return Promise.resolve({ key: key, blob: hit.blob, mime: hit.mime, cached: true });
-        }
-        return loadPersistentTts(key).then(function (record) {
-            if (record) {
+        const force = !!(options && options.force);
+        const fromCache = function () {
+            if (ttsMemoryCache.has(key)) {
+                const hit = ttsMemoryCache.get(key);
+                return Promise.resolve({ key: key, blob: hit.blob, mime: hit.mime, cached: true });
+            }
+            return loadPersistentTts(key).then(function (record) {
+                if (!record) return null;
                 ttsMemoryCache.set(key, { blob: record.blob, mime: record.mime });
                 return { key: key, blob: record.blob, mime: record.mime, cached: true };
-            }
+            });
+        };
+        const synthesize = function () {
             return synthesizeTts(text, request).then(function (result) {
                 ttsMemoryCache.set(key, result);
                 const record = {
@@ -971,7 +991,9 @@
                     return { key: key, blob: result.blob, mime: result.mime, cached: false };
                 });
             });
-        });
+        };
+        if (force) return synthesize();
+        return fromCache().then(function (hit) { return hit || synthesize(); });
     }
 
     function extractQuotedText(text) {
@@ -1126,9 +1148,10 @@
         return request;
     }
 
-    function playAvatarSpeech(button, avatar) {
+    function playAvatarSpeech(button, avatar, options) {
         const targetAvatar = avatar || button;
         if (!targetAvatar) return;
+        const force = !!(options && options.force);
         const speech = getAvatarSpeech(targetAvatar);
         const stopping = (currentAudioButton === targetAvatar || isCurrentSpeech(speech)) && (currentAudio || targetAvatar.classList.contains('eca-audio-loading'));
         if (stopping) { stopCurrentAudio(); return; }
@@ -1145,7 +1168,7 @@
         currentAudioButton = targetAvatar;
         currentAudioState = { name: speech.name, text: speech.text, phase: 'loading' };
         const seq = ++audioRequestSeq;
-        getOrCreateAudio(speech.text, request).then(function (result) {
+        getOrCreateAudio(speech.text, request, { force: force }).then(function (result) {
             if (seq !== audioRequestSeq) return;
             const audio = new topWindow.Audio();
             const url = (topWindow.URL || URL).createObjectURL(result.blob);
@@ -1160,6 +1183,8 @@
             audio.onerror = function () { if (currentAudio === audio) { stopCurrentAudio(); toast('音频播放失败，请重试', true); } };
             const playResult = audio.play();
             if (playResult && typeof playResult.catch === 'function') playResult.catch(function () { if (currentAudio === audio) { stopCurrentAudio(); toast('浏览器阻止了音频播放，请再次点击', true); } });
+            // 强制重生成时明确回报结果，便于确认「这次真的重新请求了」而不是回放缓存
+            if (force) toast(result.cached ? '重新生成命中了缓存（未重新请求）' : '已重新生成（本次未使用缓存）', !!result.cached);
         }).catch(function (error) {
             if (seq !== audioRequestSeq) {
                 // 已被取消或被新的请求顶替：错误不再无声消失，进排障日志备查
@@ -1182,6 +1207,8 @@
         if (event.button !== undefined && event.button !== 0 && event.pointerType !== 'touch') return;
         const avatar = event.currentTarget;
         cancelLongPress();
+        // 新手势开始：此前长按留下的回响 click 到此作废（真实点击总是先有 pointerdown）
+        longPressEcho = false;
         longPressTarget = avatar;
         longPressStartX = Number(event.clientX) || 0;
         longPressStartY = Number(event.clientY) || 0;
@@ -1191,7 +1218,7 @@
             cancelLongPress();
             if (!target || !settings.ttsEnabled) return;
             if (target.isConnected === false) return; // 期间被重扫重建，旧元素已脱离文档
-            longPressFiredAt = Date.now();
+            longPressEcho = true;
             if (typeof navigator !== 'undefined' && navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* 无振动支持 */ } }
             clearAvatarSpeechCache(target);
         }, LONG_PRESS_MS);
@@ -1220,10 +1247,11 @@
             if (!uiConfirm(tip)) return;
             return ttsDelete(key).then(function () {
                 ttsMemoryCache.delete(key);
-                toast('已清除该段缓存，正在重新生成');
+                toast('已清除该段缓存，正在重新生成…');
                 // 先停掉可能在播/在飞的旧音频，否则 playAvatarSpeech 会把这次点击当成「再点停止」
                 stopCurrentAudio();
-                playAvatarSpeech(avatar);
+                // force：绕过两层缓存直接重新请求，杜绝「删了缓存却仍回放旧音频」这类情况
+                playAvatarSpeech(avatar, null, { force: true });
             }, function (error) { toast('清除缓存失败：' + (error && error.message || error), true); });
         }).catch(function (error) { toast('读取缓存失败：' + (error && error.message || error), true); });
     }
@@ -1264,8 +1292,10 @@
                 avatar.dataset.ecaAudioBound = '1';
                 avatar.addEventListener('click', function (event) {
                     if (!settings.ttsEnabled) return;
-                    if (Date.now() - longPressFiredAt < LONG_PRESS_CLICK_GUARD_MS) {
-                        // 长按刚触发过：这一下是长按松手带出来的 click，不能当成播放/停止
+                    if (longPressEcho) {
+                        // 长按刚触发过：这一下是长按手势带出来的 click（松手/取消弹窗后到达），
+                        // 不能当成播放或停止；用「手势标志」而非计时，弹窗开多久都不会失效
+                        longPressEcho = false;
                         event.preventDefault();
                         event.stopPropagation();
                         return;
@@ -1281,7 +1311,7 @@
                 avatar.addEventListener('pointerleave', cancelLongPress);
                 avatar.addEventListener('contextmenu', function (event) {
                     // 只挡「长按自己的菜单」，正常右键菜单不受影响
-                    if (longPressTarget === avatar || Date.now() - longPressFiredAt < LONG_PRESS_CLICK_GUARD_MS) {
+                    if (longPressTarget === avatar || longPressEcho) {
                         event.preventDefault();
                         event.stopPropagation();
                     }
@@ -3751,6 +3781,7 @@
         closeBatchDialog: closeBatchDialog,
         openBatchDialogWithImage: openBatchDialogWithImage,
     };
+    bridgeRef = topWindow.EmoAvatar;
 
     // ============================================
     // 面板内排障诊断（无需控制台）
@@ -3853,6 +3884,12 @@
         add(hasSupport, ':has() 兼容性', hasSupport ? '支持' : '不支持（两列兜底失效）');
         const status = topWindow.EmoAvatar && topWindow.EmoAvatar.debugStatus ? topWindow.EmoAvatar.debugStatus() : null;
         if (status) lines.push('脚本状态：' + JSON.stringify(status));
+        const dupInfo = previousInstance
+            ? ('页面上先加载了 v' + previousInstance + ' 实例')
+            : (bridgeRef && topWindow.EmoAvatar !== bridgeRef ? '后加载的另一份脚本覆盖了桥对象' : '');
+        if (dupInfo) {
+            add(false, '脚本重复加载', dupInfo + '：两份脚本会同时抢头像点击与语音状态，请只保留一份后刷新页面');
+        }
         if (dbgBuffer.length > 0) {
             lines.push('判定链日志（最近 ' + dbgBuffer.length + ' 条）：');
             dbgBuffer.slice(-30).forEach(function (l) { lines.push('  ' + l); });
@@ -3912,6 +3949,12 @@
     function init() {
         loadState();
         injectStyles();
+        if (previousInstance) {
+            const msg = '检测到情绪头像脚本被加载了两次（页面上已有 v' + previousInstance + ' 实例）。两份脚本会同时抢头像的点击与语音状态，'
+                + '可能出现「点一下直接出声、不进入加载态」「长按重生成没反应」等错乱。请到酒馆助手脚本库删掉旧版本、只保留一份，然后刷新页面。';
+            console.warn('[' + SCRIPT_NAME + '] ' + msg);
+            toast(msg, true);
+        }
         applySizeVar();
         applyAlignMode();
         addMenuButton();

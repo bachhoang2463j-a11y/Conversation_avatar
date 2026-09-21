@@ -1495,6 +1495,12 @@ function __longPress(el, ms) {
     setTimeout(function () { __pointer(el, 'pointerup'); resolve(); }, ms || 700);
   });
 }
+/* 真实点击：pointerdown → pointerup → click（程序化 .click() 缺 pointerdown，会被长按回响判定拦下） */
+function __tap(el) {
+  __pointer(el, 'pointerdown');
+  __pointer(el, 'pointerup');
+  el.click();
+}
 function __toasts() {
   return Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
 }
@@ -2192,21 +2198,19 @@ test('M10-27 长按后随后的那次 click 不会误触发播放', function () 
   var mes = __addFloor('<p>{弗兰克(微笑)}“长按保护用例。”</p>', false);
   window.EmoAvatar.scanAll();
   var btn = __buttons(mes)[0];
-  // 先等过上一用例的长按保护窗口（800ms），否则本次点击会被误判成长按回响
   return window.EmoAvatar.clearTtsCache().then(function () {
-    return __wait(900);
-  }).then(function () {
+    window.EmoAvatar.clearTtsMemory();
     return __longPress(btn, 700);
   }).then(function () {
-    btn.click();                          // 长按松手带出的那次 click
+    btn.click();                          // 长按松手带出的那次 click（无 pointerdown）
     assert(__countTtsCalls('mimo') === 0, '长按后的 click 不应发起合成，实际 ' + __countTtsCalls('mimo') + ' 次');
     assert(!btn.classList.contains('eca-audio-loading'), '长按后的 click 不应进入加载态：' + btn.className);
-    return __wait(900);                   // 等保护窗口过期
+    return __wait(120);
   }).then(function () {
-    btn.click();
+    __tap(btn);                           // 真实点击（带 pointerdown）：回响作废，应正常播放
     return __wait(160);
   }).then(function () {
-    assert(__countTtsCalls('mimo') === 1, '保护窗口过期后点击应正常播放，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '真实点击应正常播放，实际 ' + __countTtsCalls('mimo') + ' 次');
     assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
   });
 });
@@ -2254,6 +2258,40 @@ test('M10-28 豆包：音色内置下拉含大壹，Resource ID 内置且空值�
       assert(call.body.req_params.speaker === 'zh_male_dayi_saturn_bigtts', 'speaker 应为大壹 id，实际 ' + call.body.req_params.speaker);
       assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
     });
+  });
+});
+
+test('M10-29 长按回响 click 不受弹窗耗时影响；强制重生成绕过缓存并回报结果', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“长按耗时用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btn);                            // 首次真实点击：合成并落入缓存
+    return __wait(160);
+  }).then(function () {
+    assert(window.__audioPlayCount === 1, '首次点击应播放，实际 ' + window.__audioPlayCount + ' 次');
+    window.__lastAudio.onended();
+    window.__confirmMessages = [];
+    window.__confirmValue = true;
+    window.__fetchCalls = [];
+    return __longPress(btn, 700);          // 长按 → 确认 → 清缓存 + 强制重生成
+  }).then(function () {
+    return __wait(240);
+  }).then(function () {
+    assert(window.__confirmMessages.length === 1, '应弹一次确认，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '确认后应重新请求一次，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__toasts().indexOf('已重新生成（本次未使用缓存）') !== -1, '应回报本次未使用缓存：' + __toasts());
+    // 模拟确认弹窗停留很久：2 秒后才到达的长按回响 click 也必须被拦下（按固定计时会漏掉）
+    return __wait(2000);
+  }).then(function () {
+    btn.click();
+    assert(__countTtsCalls('mimo') === 1, '长按回响不应再发起请求，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 2, '长按回响不应打断或重启播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-playing'), '重生成后应处于播放态：' + btn.className);
   });
 });
 
