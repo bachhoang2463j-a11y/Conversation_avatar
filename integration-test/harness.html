@@ -88,11 +88,13 @@ window.__chat = [];
 window.__errors = [];
 window.addEventListener('error', function (e) { window.__errors.push(e.message); });
 
-/* prompt/confirm 桩：默认取消/确认，用例按需设置 __promptValue / __confirmValue */
+/* prompt/confirm 桩：默认取消/确认，用例按需设置 __promptValue / __confirmValue；
+   __confirmMessages 记录确认文案，供「长按清缓存」等用例断言弹窗内容 */
 window.__promptValue = null;
 window.prompt = function () { return window.__promptValue; };
 window.__confirmValue = true;
-window.confirm = function () { return window.__confirmValue; };
+window.__confirmMessages = [];
+window.confirm = function (msg) { window.__confirmMessages.push(String(msg)); return window.__confirmValue; };
 
 function __log(msg) {
   var el = document.getElementById('log');
@@ -141,11 +143,15 @@ function __btn(label, fn, warn) {
 window.__fetchCalls = [];
 window.__fetchMode = 'ok';
 window.__failHosts = [];
+window.__fetchDelayMs = 0;   // 响应延迟：给「取消在途合成」用例留出取消窗口
+window.__fetchFailTimes = 0; // 接下来的 N 次请求失败（用于重试用例）
+window.__failStatus = 500;   // __fetchMode='fail' 时的 HTTP 状态码（500 可重试 / 401 不可重试）
 window.__fakeAudioBytes = [73, 68, 51, 4, 0, 0, 0, 0];
 function __audioBlob() { return new Blob([new Uint8Array(window.__fakeAudioBytes)], { type: 'audio/mpeg' }); }
+function __abortError() { return new DOMException('The user aborted a request.', 'AbortError'); }
 function __failResponse() {
   return Promise.resolve({
-    ok: false, status: 500,
+    ok: false, status: window.__failStatus,
     headers: { get: function () { return null; } },
     blob: function () { return Promise.resolve(new Blob()); },
     json: function () { return Promise.resolve({}); },
@@ -154,44 +160,61 @@ function __failResponse() {
 }
 window.fetch = function (url, options) {
   var opts = options || {};
-  var rec = { url: String(url), method: opts.method || 'GET', headers: opts.headers || {}, body: null };
+  var u = String(url);
+  var rec = { url: u, method: opts.method || 'GET', headers: opts.headers || {}, body: null, at: Date.now(), aborted: false };
   if (opts.body) {
     try { rec.body = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body; }
     catch (e) { rec.body = opts.body; }
   }
   window.__fetchCalls.push(rec);
-  var u = String(url);
-  if (window.__fetchMode === 'fail') return __failResponse();
-  for (var i = 0; i < window.__failHosts.length; i++) {
-    if (u.indexOf(window.__failHosts[i]) !== -1) return __failResponse();
-  }
-  if (u.indexOf('/t2a_v2') !== -1) {
+  function build() {
+    if (window.__fetchFailTimes > 0) { window.__fetchFailTimes--; return __failResponse(); }
+    if (window.__fetchMode === 'fail') return __failResponse();
+    for (var i = 0; i < window.__failHosts.length; i++) {
+      if (u.indexOf(window.__failHosts[i]) !== -1) return __failResponse();
+    }
+    if (u.indexOf('/t2a_v2') !== -1) {
+      return Promise.resolve({
+        ok: true, status: 200,
+        headers: { get: function () { return 'application/json'; } },
+        json: function () { return Promise.resolve({ base_resp: { status_code: 0 }, data: { audio: '49443304' }, extra_info: {} }); },
+      });
+    }
+    if (u.indexOf('openspeech.bytedance.com') !== -1) {
+      var b64 = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
+      return Promise.resolve({
+        ok: true, status: 200,
+        headers: { get: function () { return 'application/json'; } },
+        text: function () { return Promise.resolve('{"code":0,"data":"' + b64 + '"}\n{"code":20000000}\n'); },
+      });
+    }
+    if (u.indexOf('/chat/completions') !== -1) {
+      var b64m = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
+      return Promise.resolve({
+        ok: true, status: 200,
+        headers: { get: function () { return 'application/json'; } },
+        json: function () { return Promise.resolve({ choices: [{ finish_reason: 'stop', message: { audio: { data: b64m, format: 'wav' } } }] }); },
+      });
+    }
     return Promise.resolve({
       ok: true, status: 200,
-      headers: { get: function () { return 'application/json'; } },
-      json: function () { return Promise.resolve({ base_resp: { status_code: 0 }, data: { audio: '49443304' }, extra_info: {} }); },
+      headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? 'audio/mpeg' : null; } },
+      blob: function () { return Promise.resolve(__audioBlob()); },
     });
   }
-  if (u.indexOf('openspeech.bytedance.com') !== -1) {
-    var b64 = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
-    return Promise.resolve({
-      ok: true, status: 200,
-      headers: { get: function () { return 'application/json'; } },
-      text: function () { return Promise.resolve('{"code":0,"data":"' + b64 + '"}\n{"code":20000000}\n'); },
-    });
-  }
-  if (u.indexOf('/chat/completions') !== -1) {
-    var b64m = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
-    return Promise.resolve({
-      ok: true, status: 200,
-      headers: { get: function () { return 'application/json'; } },
-      json: function () { return Promise.resolve({ choices: [{ finish_reason: 'stop', message: { audio: { data: b64m, format: 'wav' } } }] }); },
-    });
-  }
-  return Promise.resolve({
-    ok: true, status: 200,
-    headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? 'audio/mpeg' : null; } },
-    blob: function () { return Promise.resolve(__audioBlob()); },
+  // 与真实 fetch 一致地尊重 signal：abort 后 reject(AbortError)，并记录 aborted 供断言
+  return new Promise(function (resolve, reject) {
+    function deliver() {
+      if (rec.aborted) return;
+      if (opts.signal && opts.signal.aborted) { rec.aborted = true; reject(__abortError()); return; }
+      resolve(build());
+    }
+    if (opts.signal) {
+      if (opts.signal.aborted) { rec.aborted = true; reject(__abortError()); return; }
+      opts.signal.addEventListener('abort', function () { rec.aborted = true; reject(__abortError()); });
+    }
+    if (window.__fetchDelayMs > 0) setTimeout(deliver, window.__fetchDelayMs);
+    else deliver();
   });
 };
 window.__audioInstances = [];
@@ -264,7 +287,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.4.0', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.5.0', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1451,10 +1474,33 @@ function __ttsReset() {
   window.__audioPlayCount = 0;
   window.__fetchMode = 'ok';
   window.__failHosts = [];
+  window.__fetchDelayMs = 0;
+  window.__fetchFailTimes = 0;
+  window.__failStatus = 500;
+  window.__confirmMessages = [];
   window.EmoAvatar.setTtsEnabled(true);
   window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: '' } });
 }
 function __buttons(mes) { return mes.querySelectorAll('.eca-avatar.eca-has-speech'); }
+/* 长按手势：派发 pointer 事件（触摸/鼠标同判定），由 __longPress 保证按住超过 LONG_PRESS_MS */
+function __pointer(el, type, x, y) {
+  el.dispatchEvent(new PointerEvent(type, {
+    bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch',
+    button: 0, buttons: 1, clientX: x || 0, clientY: y || 0,
+  }));
+}
+function __longPress(el, ms) {
+  __pointer(el, 'pointerdown');
+  return new Promise(function (resolve) {
+    setTimeout(function () { __pointer(el, 'pointerup'); resolve(); }, ms || 700);
+  });
+}
+function __toasts() {
+  return Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
+}
+function __clearToasts() {
+  Array.prototype.forEach.call(document.querySelectorAll('.eca-toast'), function (t) { t.remove(); });
+}
 test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', function () {
   var api = window.EmoAvatar;
   ['setTtsEnabled', 'getTtsConfig', 'setTtsConfig', 'getVoiceConfig', 'setVoiceConfig',
@@ -1615,9 +1661,9 @@ test('M10-8 Edge 不落盘；总开关关闭后按钮消失、开启后恢复', 
     assert(document.querySelectorAll('.eca-avatar.eca-has-speech').length >= 1, '开启后头像语音属性应恢复');
   });
 });
-test('M10-9 合成失败只提示重试、不切换引擎', function () {
+test('M10-9 合成失败自动重试一次仍失败 → 只提示重试、不切换引擎', function () {
   __resetChat(); __seedM1(); __ttsReset();
-  // 固定代理：单地址模式不做轮换，因此"只尝试一次"仍成立；代理池的轮换行为由 M10-12 覆盖
+  // 固定代理：单地址模式不做轮换，因此"只尝试 Edge"仍成立；代理池的轮换行为由 M10-12 覆盖
   window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.invalid/tts' } });
   window.__fetchMode = 'fail';
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
@@ -1625,10 +1671,15 @@ test('M10-9 合成失败只提示重试、不切换引擎', function () {
   window.EmoAvatar.scanAll();
   var btn = __buttons(mes)[0];
   btn.click();
-  return __wait(150).then(function () {
-    assert(__countTtsCalls('edge') === 1, '应只尝试 Edge 一次');
+  // 500 属可重试错误：等过 500ms 重试间隔后再断言
+  return __wait(120).then(function () {
+    assert(__countTtsCalls('edge') === 1, '首次失败后应先等待重试，实际已发 ' + __countTtsCalls('edge') + ' 次');
+    return __wait(700);
+  }).then(function () {
+    assert(__countTtsCalls('edge') === 2, '同引擎应重试一次（共 2 次），实际 ' + __countTtsCalls('edge'));
     assert(__countTtsCalls('minimax') === 0 && __countTtsCalls('doubao') === 0, '失败时不应改走其它引擎');
     assert(!btn.classList.contains('eca-audio-loading') && !btn.classList.contains('eca-audio-playing'), '失败后按钮应复位');
+    assert(__toasts().indexOf('语音生成失败') !== -1, '应提示失败可重试：' + __toasts());
     window.__fetchMode = 'ok';
   });
 });
@@ -1653,17 +1704,16 @@ test('M10-10 面板入口：语音设置 / 音频设置 / 语音缓存', functio
   assert(stored && stored.edge.proxyUrl === 'https://example.test/tts', 'Edge 代理未持久化：' + JSON.stringify(stored && stored.edge));
   assert(stored.minimax.apiKey === 'key-abc', 'MiniMax Key 未持久化');
   assert(dlg.style.display === 'none', '保存后弹窗应关闭');
-  // 角色语音设置：切到豆包并填 Resource ID
+  // 角色语音设置：切到豆包并在内置下拉里选音色（Resource ID 已内置，无需手填）
   panel.querySelector('#eca-voice-btn').click();
   var vdlg = document.getElementById('eca-voice-settings');
   assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
   vdlg.querySelector('#eca-voice-engine').value = 'doubao';
   vdlg.querySelector('#eca-voice-engine').dispatchEvent(new Event('change', { bubbles: true }));
-  vdlg.querySelector('#eca-voice-id').value = 'zh_male_test';
-  vdlg.querySelector('#eca-resource-id').value = 'seed-tts-2.0';
+  vdlg.querySelector('#eca-doubao-voice').value = 'zh_male_dayi_saturn_bigtts';
   vdlg.querySelector('#eca-voice-save').click();
   var vc = window.EmoAvatar.getVoiceConfig('弗兰克');
-  assert(vc && vc.engine === 'doubao' && vc.voiceId === 'zh_male_test' && vc.resourceId === 'seed-tts-2.0',
+  assert(vc && vc.engine === 'doubao' && vc.voiceId === 'zh_male_dayi_saturn_bigtts' && vc.resourceId === 'seed-tts-2.0',
     '角色语音配置未保存：' + JSON.stringify(vc));
   // 缓存面板：应能打开并列出条目
   panel.querySelector('#eca-cache-btn').click();
@@ -1889,16 +1939,19 @@ test('M10-19 语音设置按引擎隔离显示，不串字段', function () {
     assert(shown('#eca-edge-rate') && shown('#eca-edge-pitch'), 'Edge 引擎下应显示语速/音调');
     assert(!shown('#eca-mimo-voice'), 'Edge 引擎下不应显示 MiMo 音色');
     assert(!shown('#eca-voice-id'), 'Edge 引擎下不应显示音色 ID');
+    assert(!shown('#eca-doubao-voice'), 'Edge 引擎下不应显示豆包音色');
     assert(!shown('#eca-resource-id'), 'Edge 引擎下不应显示豆包 Resource ID');
     // 切到 MiMo：只露 MiMo，且下拉不残留 Edge 音色
     engineSel.value = 'mimo'; engineSel.dispatchEvent(new Event('change', { bubbles: true }));
     assert(shown('#eca-mimo-voice'), 'MiMo 引擎下应显示 MiMo 音色');
     assert(!shown('#eca-edge-voice') && !shown('#eca-edge-rate'), 'MiMo 引擎下不应显示 Edge 字段');
     assert(!shown('#eca-resource-id'), 'MiMo 引擎下不应显示豆包字段');
+    assert(!shown('#eca-doubao-voice'), 'MiMo 引擎下不应显示豆包音色');
     assert(vdlg.querySelector('#eca-mimo-voice').value === 'mimo_default', 'MiMo 下拉不应残留 Edge 音色，实际 ' + vdlg.querySelector('#eca-mimo-voice').value);
-    // 切到豆包：音色 ID 与 Resource ID 同现
+    // 切到豆包：豆包音色下拉与 Resource ID 同现，且不串 MiniMax 的文本框
     engineSel.value = 'doubao'; engineSel.dispatchEvent(new Event('change', { bubbles: true }));
-    assert(shown('#eca-voice-id') && shown('#eca-resource-id'), '豆包引擎下应显示音色 ID 与 Resource ID');
+    assert(shown('#eca-doubao-voice') && shown('#eca-resource-id'), '豆包引擎下应显示豆包音色与 Resource ID');
+    assert(!shown('#eca-voice-id'), '豆包引擎下不应显示 MiniMax 音色 ID');
     assert(!shown('#eca-mimo-voice') && !shown('#eca-edge-voice'), '豆包引擎下不应显示其它引擎字段');
     vdlg.querySelector('[data-audio-close]').click();
     panel.querySelector('.eca-close').click();
@@ -1959,6 +2012,247 @@ test('M10-21 MiMo 复刻音色：添加后用 voiceclone 模型与 data URL 合�
     }).then(function () {
       var toasts = Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
       assert(toasts.indexOf('复刻音色已不存在') !== -1, '删除后应提示复刻音色不存在，实际：' + toasts);
+    });
+  });
+});
+
+test('M10-22 取消在途合成后不再幽灵播放，也没有迟到提示', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“取消测试甲。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  window.__fetchDelayMs = 150;            // 请求停在途中，留出取消窗口
+  btn.click();
+  return __wait(40).then(function () {
+    assert(btn.classList.contains('eca-audio-loading'), '合成中应处于加载态：' + btn.className);
+    btn.click();                          // 再点 = 取消
+    assert(!btn.classList.contains('eca-audio-loading') && !btn.classList.contains('eca-audio-playing'), '取消后应立即复位：' + btn.className);
+    return __wait(400);
+  }).then(function () {
+    window.__fetchDelayMs = 0;
+    assert(window.__audioPlayCount === 0, '取消后不应再播放（幽灵播放），实际播放 ' + window.__audioPlayCount + ' 次');
+    assert(!btn.classList.contains('eca-audio-playing') && !btn.classList.contains('eca-audio-loading'), '取消后不应残留播放/加载态：' + btn.className);
+    assert(__toasts().indexOf('语音生成失败') === -1 && __toasts().indexOf('已取消') === -1, '取消不应产生任何提示：' + __toasts());
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.text.indexOf('取消测试甲') !== -1; }).length === 0, '被取消的合成不应写入持久化缓存');
+  });
+});
+test('M10-23 取消会真正中断在途请求（abort），且之后仍能正常合成', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“取消测试乙。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  window.__fetchDelayMs = 200;
+  btn.click();
+  return __wait(40).then(function () {
+    btn.click();
+    var call = __lastTtsCall('mimo');
+    assert(call && call.aborted === true, '取消后应 abort 在途请求，而不是只丢弃结果');
+    window.__fetchDelayMs = 0;
+    return __wait(80);
+  }).then(function () {
+    btn.click();                          // 取消后立即再点：应能重新合成，说明状态机没有卡死
+    return __wait(180);
+  }).then(function () {
+    assert(__countTtsCalls('mimo') === 2, '取消后应重新发起合成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 1, '取消后重新点击应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+  });
+});
+test('M10-24 失败自动重试一次（间隔 ≥400ms）；不可重试错误不重试', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“重试成功用例。”</p>', false);
+  var mes2 = __addFloor('<p>{弗兰克(微笑)}“不可重试用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  window.__fetchFailTimes = 1;            // 首次失败 → 重试应成功
+  __buttons(mes)[0].click();
+  return __wait(120).then(function () {
+    assert(__countTtsCalls('edge') === 1, '首次失败后应处于重试等待中，实际已发 ' + __countTtsCalls('edge') + ' 次');
+    return __wait(700);
+  }).then(function () {
+    var calls = window.__fetchCalls.filter(function (c) { return c.url.indexOf('/tts?') !== -1; });
+    assert(calls.length === 2, '应同引擎重试一次，实际 ' + calls.length + ' 次');
+    assert(calls[1].at - calls[0].at >= 400, '重试间隔应约 500ms，实际 ' + (calls[1].at - calls[0].at) + 'ms');
+    assert(window.__audioPlayCount === 1, '重试成功后应播放，实际 ' + window.__audioPlayCount + ' 次');
+    // 401 属不可重试错误：只发一次请求
+    window.__fetchCalls = [];
+    window.__fetchMode = 'fail';
+    window.__failStatus = 401;
+    __buttons(mes2)[0].click();
+    return __wait(700);
+  }).then(function () {
+    assert(__countTtsCalls('edge') === 1, '401 不应重试，实际 ' + __countTtsCalls('edge') + ' 次');
+    window.__fetchMode = 'ok';
+    window.__failStatus = 500;
+  });
+});
+test('M10-25 持久化开关勾选即落盘；关闭后不再写入/命中，旧记录仍列出并标注', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setCharactersPersist(['弗兰克', '罗兰']);
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“开关用例甲。”</p>', false);
+  window.EmoAvatar.scanAll();
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    __buttons(mes)[0].click();
+    return __wait(160);
+  }).then(function () {
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.engine === 'mimo'; }).length === 1, '开启持久化时应写入 1 条，实际 ' + records.length);
+    // 打开「音频设置」，取消勾选 MiMo 持久化 → 必须立即落盘（不再依赖「保存」按钮）
+    window.EmoAvatar.openPanel();
+    document.getElementById('eca-panel').querySelector('#eca-tts-settings-btn').click();
+    var dlg = document.getElementById('eca-audio-settings');
+    var box = dlg.querySelector('#eca-mimo-persist');
+    assert(box && box.checked === true, 'MiMo 持久化默认为开启');
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    var stored = JSON.parse(localStorage.getItem('emoavatar_tts_config'));
+    assert(stored && stored.mimo && stored.mimo.persist === false, '取消勾选应立即写入 localStorage：' + JSON.stringify(stored && stored.mimo));
+    dlg.querySelector('[data-audio-close]').click();   // 模拟点 × 关闭（不点「保存」）
+    assert(window.EmoAvatar.getTtsConfig().mimo.persist === false, '关窗不应回滚开关状态');
+    window.EmoAvatar.closePanel();
+    // 关闭后：清掉内存缓存后同句重播必须重新请求（不再命中磁盘缓存）
+    window.__lastAudio.onended();          // 先结束播放，否则这次点击会被当成「再点停止」
+    window.EmoAvatar.clearTtsMemory();
+    var before = __countTtsCalls('mimo');
+    __buttons(mes)[0].click();
+    return __wait(160).then(function () {
+      assert(__countTtsCalls('mimo') === before + 1, '关闭持久化后不应命中旧缓存，实际请求数 ' + __countTtsCalls('mimo'));
+      return window.EmoAvatar.getTtsCache();
+    });
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.engine === 'mimo'; }).length === 1, '关闭持久化后不应新增记录，实际 ' + records.length);
+    // 缓存面板：旧记录仍在列表里，且提示与逐行标记都要写明「已停用」
+    window.EmoAvatar.openPanel();
+    document.getElementById('eca-panel').querySelector('#eca-cache-btn').click();
+    return __wait(160).then(function () {
+      var cachePanel = document.getElementById('eca-cache-panel');
+      var tip = cachePanel.querySelector('.eca-audio-tip').textContent;
+      assert(tip.indexOf('MiMo') !== -1 && tip.indexOf('持久化已关闭') !== -1, '面板应提示 MiMo 持久化已关闭：' + tip);
+      var subs = Array.prototype.map.call(cachePanel.querySelectorAll('.eca-cache-sub'), function (el) { return el.textContent; }).join(' | ');
+      assert(subs.indexOf('已停用') !== -1, '关闭持久化的旧记录应标注已停用：' + subs);
+      window.EmoAvatar.closePanel();
+    });
+  });
+});
+test('M10-26 长按头像：有持久化缓存才弹确认，确认后清缓存并重新生成', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“长按清理用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    btn.click();                          // 先合成一次并落盘
+    return __wait(160);
+  }).then(function () {
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.text.indexOf('长按清理用例') !== -1; }).length === 1, '前置条件：该段应有 1 条持久化缓存');
+    assert(window.__audioPlayCount === 1, '前置条件：首次点击应播放一次，实际 ' + window.__audioPlayCount);
+    window.__confirmMessages = [];
+    window.__confirmValue = true;
+    return __longPress(btn, 700);         // 按住不动 → 600ms 触发长按
+  }).then(function () {
+    return __wait(280);
+  }).then(function () {
+    assert(window.__confirmMessages.length === 1, '长按有缓存应弹一次确认，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(window.__confirmMessages[0].indexOf('弗兰克') !== -1 && window.__confirmMessages[0].indexOf('长按清理用例') !== -1,
+      '确认文案应含角色与对白：' + window.__confirmMessages[0]);
+    assert(__countTtsCalls('mimo') === 2, '确认后应重新合成（命中缓存就不会再发请求），实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 2, '确认后应重新播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(__toasts().indexOf('已清除该段缓存') !== -1, '应提示正在重新生成：' + __toasts());
+    // 无缓存的段落：长按只提示，不弹确认
+    window.EmoAvatar.clearTtsMemory();
+    return window.EmoAvatar.clearTtsCache();
+  }).then(function () {
+    __clearToasts();
+    window.__confirmMessages = [];
+    window.EmoAvatar.scanAll();
+    return __longPress(__buttons(mes)[0], 700);
+  }).then(function () {
+    return __wait(200);
+  }).then(function () {
+    assert(window.__confirmMessages.length === 0, '无缓存时不应弹确认：' + window.__confirmMessages.join(' / '));
+    assert(__toasts().indexOf('没有持久化缓存') !== -1, '无缓存时应提示没有缓存：' + __toasts());
+  });
+});
+test('M10-27 长按后随后的那次 click 不会误触发播放', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“长按保护用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  // 先等过上一用例的长按保护窗口（800ms），否则本次点击会被误判成长按回响
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    return __wait(900);
+  }).then(function () {
+    return __longPress(btn, 700);
+  }).then(function () {
+    btn.click();                          // 长按松手带出的那次 click
+    assert(__countTtsCalls('mimo') === 0, '长按后的 click 不应发起合成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(!btn.classList.contains('eca-audio-loading'), '长按后的 click 不应进入加载态：' + btn.className);
+    return __wait(900);                   // 等保护窗口过期
+  }).then(function () {
+    btn.click();
+    return __wait(160);
+  }).then(function () {
+    assert(__countTtsCalls('mimo') === 1, '保护窗口过期后点击应正常播放，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+  });
+});
+test('M10-28 豆包：音色内置下拉含大壹，Resource ID 内置且空值回落', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  return __wait(80).then(function () {
+    panel.querySelector('#eca-char-list .eca-char-item').click();
+    panel.querySelector('#eca-voice-btn').click();
+    var vdlg = document.getElementById('eca-voice-settings');
+    assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
+    vdlg.querySelector('#eca-voice-engine').value = 'doubao';
+    vdlg.querySelector('#eca-voice-engine').dispatchEvent(new Event('change', { bubbles: true }));
+    var voiceSel = vdlg.querySelector('#eca-doubao-voice');
+    assert(voiceSel && voiceSel.tagName === 'SELECT', '豆包音色应为内置下拉');
+    var values = Array.prototype.map.call(voiceSel.options, function (o) { return o.value; });
+    assert(values.indexOf('zh_male_dayi_saturn_bigtts') !== -1, '下拉应内置大壹：' + values.join(','));
+    assert(values.indexOf('saturn_zh_female_cancan_tob') !== -1, '下拉应内置知性灿灿');
+    assert(values.indexOf('__custom__') !== -1, '下拉应保留「自定义」入口');
+    var resSel = vdlg.querySelector('#eca-resource-id');
+    assert(resSel && resSel.tagName === 'SELECT', 'Resource ID 应为内置下拉，实际 ' + (resSel && resSel.tagName));
+    var resValues = Array.prototype.map.call(resSel.options, function (o) { return o.value; });
+    assert(resValues.indexOf('seed-tts-2.0') !== -1 && resValues.indexOf('seed-icl-2.0') !== -1, 'Resource ID 应内置合成/复刻两项：' + resValues.join(','));
+    assert(resSel.value === 'seed-tts-2.0', '默认应为语音合成 2.0，实际 ' + resSel.value);
+    voiceSel.value = 'zh_male_dayi_saturn_bigtts';
+    vdlg.querySelector('#eca-voice-save').click();
+    var vc = window.EmoAvatar.getVoiceConfig('弗兰克');
+    assert(vc && vc.engine === 'doubao' && vc.voiceId === 'zh_male_dayi_saturn_bigtts' && vc.resourceId === 'seed-tts-2.0',
+      '保存结果不符：' + JSON.stringify(vc));
+    vdlg.querySelector('[data-audio-close]').click();
+    window.EmoAvatar.closePanel();
+    // 老配置 resourceId 为空 → 请求头仍应带上内置的 seed-tts-2.0
+    __resetChat(); __seedM1(); __ttsReset();
+    window.EmoAvatar.setTtsConfig({ doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+    window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'doubao', voiceId: 'zh_male_dayi_saturn_bigtts', resourceId: '' });
+    var mes = __addFloor('<p>{弗兰克(微笑)}“豆包内置资源用例。”</p>', false);
+    window.EmoAvatar.scanAll();
+    __buttons(mes)[0].click();
+    return __wait(220).then(function () {
+      var call = __lastTtsCall('doubao');
+      assert(call, '应发出豆包请求');
+      assert(call.headers['X-Api-Resource-Id'] === 'seed-tts-2.0', '空 Resource ID 应回落到 seed-tts-2.0，实际 ' + call.headers['X-Api-Resource-Id']);
+      assert(call.body.req_params.speaker === 'zh_male_dayi_saturn_bigtts', 'speaker 应为大壹 id，实际 ' + call.body.req_params.speaker);
+      assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
     });
   });
 });

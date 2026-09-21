@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.4.0';
+    const VERSION = '0.5.0';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -44,6 +44,8 @@
     /** 头像显示高度默认值（em），面板可调 */
     const DEFAULT_SIZE = 2.5;
     const TTS_ENGINES = ['edge', 'minimax', 'doubao', 'mimo'];
+    const TTS_ENGINE_LABELS = { edge: 'Edge', minimax: 'MiniMax', doubao: '豆包', mimo: 'MiMo' };
+    function ttsEngineLabel(engine) { return TTS_ENGINE_LABELS[engine] || String(engine || ''); }
     const EDGE_VOICES = [
         { id: 'zh-CN-XiaoxiaoNeural', name: '晓晓（女）', lang: '中文（普通话）', styles: ['general', 'assistant', 'chat', 'customerservice', 'newscast', 'affectionate', 'angry', 'calm', 'cheerful', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'sad', 'serious', 'poetry-reading'] },
         { id: 'zh-CN-XiaoyiNeural', name: '晓伊（女）', lang: '中文（普通话）', styles: ['general', 'angry', 'disgruntled', 'affectionate', 'cheerful', 'fearful', 'gentle', 'sad', 'serious'] },
@@ -97,6 +99,38 @@
     /** 复刻音色在角色配置里的 voiceId 形态：clone:<id>；参考音频存在 IndexedDB，localStorage 只留元数据 */
     const MIMO_CLONE_PREFIX = 'clone:';
     const MIMO_CLONE_MAX_BYTES = 10 * 1024 * 1024;
+    /** 豆包（火山）资源 id 内置：用户无需手输；key 与角色配置里存的 resourceId 同形，老配置零迁移 */
+    const DOUBAO_RESOURCES = [
+        { id: 'seed-tts-2.0', name: '语音合成 2.0' },
+        { id: 'seed-icl-2.0', name: '声音复刻 2.0' },
+    ];
+    const DOUBAO_DEFAULT_RESOURCE = 'seed-tts-2.0';
+    /** 豆包官方音色：speaker 字段直接透传给接口；用户自己的复刻音色可在「✎ 自定义」里手填 */
+    const DOUBAO_VOICES = [
+        { id: 'zh_male_dayi_saturn_bigtts', name: '大壹（浑厚男声）' },
+        { id: 'zh_male_ruyayichen_saturn_bigtts', name: '儒雅逸辰（儒雅男声）' },
+        { id: 'saturn_zh_male_shuanglangshaonian_tob', name: '爽朗少年（阳光少年）' },
+        { id: 'saturn_zh_male_tiancaitongzhuo_tob', name: '天才同桌（学霸感）' },
+        { id: 'zh_male_m191_uranus_bigtts', name: '云舟（稳重男声）' },
+        { id: 'zh_male_taocheng_uranus_bigtts', name: '小天（阳光少年）' },
+        { id: 'zh_female_vv_uranus_bigtts', name: 'vivi（温柔女声）' },
+        { id: 'saturn_zh_female_cancan_tob', name: '知性灿灿（知性优雅）' },
+        { id: 'zh_female_meilinvyou_saturn_bigtts', name: '魅力女友（亲密对话）' },
+        { id: 'saturn_zh_female_keainvsheng_tob', name: '可爱女生（可爱活泼）' },
+        { id: 'saturn_zh_female_tiaopigongzhu_tob', name: '调皮公主（公主风）' },
+        { id: 'zh_female_jitangnv_saturn_bigtts', name: '鸡汤女（情感治愈）' },
+        { id: 'zh_female_santongyongns_saturn_bigtts', name: '流畅女声（通用）' },
+        { id: 'zh_female_xiaohe_uranus_bigtts', name: '小何（亲切女声）' },
+        { id: 'zh_female_xueayi_saturn_bigtts', name: '儿童绘本（绘本朗读）' },
+        { id: 'zh_female_mizai_saturn_bigtts', name: '黑猫侦探社咪仔（悬疑）' },
+    ];
+    /** 长按头像清缓存重生成：触摸与鼠标同判定（按住不动 600ms），位移超阈值即取消 */
+    const LONG_PRESS_MS = 600;
+    const LONG_PRESS_MOVE_PX = 10;
+    /** 长按后抑制随后的 click，避免顶着「点击播放」再跑一次 */
+    const LONG_PRESS_CLICK_GUARD_MS = 800;
+    /** 同引擎失败自动重试一次（间隔 500ms）：只吸收网络抖动，不切换引擎、不改并发策略 */
+    const TTS_RETRY_DELAY_MS = 500;
     const EDGE_EMOTION_STYLES = {
         '默认': 'general', '微笑': 'cheerful', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'cheerful',
         '轻蔑': 'disgruntled', '杀意': 'serious', '思考': 'calm', '大笑': 'cheerful', '害羞': 'affectionate',
@@ -147,6 +181,13 @@
     let currentAudioButton = null;
     let currentAudioState = null;
     let audioRequestSeq = 0;
+    /** 在途合成的中止柄：取消/切换时真正中断 fetch，而不只是丢弃结果 */
+    let currentTtsAbort = null;
+    let longPressTimer = null;
+    let longPressTarget = null;
+    let longPressStartX = 0;
+    let longPressStartY = 0;
+    let longPressFiredAt = 0;
 
     // ============================================
     // 运行环境（酒馆助手脚本运行在 iframe 内，DOM/样式走顶层窗口）
@@ -488,17 +529,33 @@
         return { contextText: '请用“' + emotion + '”的语气朗读这段话。' };
     }
 
-    function fetchWithTimeout(url, options, timeout) {
+    /**
+     * 带超时的 fetch。outerSignal 为上层（取消合成）的中止柄：
+     * 它 abort 时同步中断本次请求，超时逻辑保持不变。
+     */
+    function fetchWithTimeout(url, options, timeout, outerSignal) {
         const controller = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
         const opts = Object.assign({}, options || {});
         if (controller) opts.signal = controller.signal;
         let timer = null;
+        let onOuterAbort = null;
+        if (controller && outerSignal) {
+            if (outerSignal.aborted) controller.abort();
+            else {
+                onOuterAbort = function () { controller.abort(); };
+                outerSignal.addEventListener('abort', onOuterAbort);
+            }
+        }
+        const cleanup = function () {
+            clearTimeout(timer);
+            if (onOuterAbort) outerSignal.removeEventListener('abort', onOuterAbort);
+        };
         const promise = topWindow.fetch(url, opts);
         if (!controller) return promise;
         return Promise.race([
             promise,
             new Promise(function (_, reject) { timer = setTimeout(function () { controller.abort(); reject(new Error('请求超时')); }, timeout || 15000); }),
-        ]).then(function (result) { clearTimeout(timer); return result; }, function (error) { clearTimeout(timer); throw error; });
+        ]).then(function (result) { cleanup(); return result; }, function (error) { cleanup(); throw error; });
     }
 
     function ensureAudioResponse(response) {
@@ -554,18 +611,27 @@
         if (!force && edgeServers.length) return Promise.resolve(edgeServers.slice());
         if (!force && restoreEdgePingCache()) return Promise.resolve(edgeServers.slice());
         const probeCfg = { rate: 0, pitch: 0, volume: 100 };
-        edgePingPromise = Promise.all(edgeProxyCandidates().map(function (server) {
-            const start = dbgNow();
-            return fetchWithTimeout(buildEdgeUrl(server.url, '测试', 'zh-CN-XiaoxiaoNeural', probeCfg, 'general'), { headers: { Accept: 'audio/*' } }, EDGE_PING_TIMEOUT)
-                .then(function (response) {
-                    return response && response.ok ? { name: server.name, url: server.url, latency: dbgNow() - start } : null;
-                })
-                .catch(function () { return null; });
-        })).then(function (results) {
+        // 成功与失败都必须把 edgePingPromise 复位：否则一次异常会让之后所有 Edge 合成
+        // 都复用这个已 rejected 的 promise，表现为「Edge 永久静默失败」
+        edgePingPromise = Promise.resolve().then(function () {
+            return Promise.all(edgeProxyCandidates().map(function (server) {
+                const start = dbgNow();
+                return fetchWithTimeout(buildEdgeUrl(server.url, '测试', 'zh-CN-XiaoxiaoNeural', probeCfg, 'general'), { headers: { Accept: 'audio/*' } }, EDGE_PING_TIMEOUT)
+                    .then(function (response) {
+                        return response && response.ok ? { name: server.name, url: server.url, latency: dbgNow() - start } : null;
+                    })
+                    .catch(function () { return null; });
+            }));
+        }).then(function (results) {
             edgeServers = results.filter(Boolean).sort(function (a, b) { return a.latency - b.latency; });
             persistEdgePingCache();
-            edgePingPromise = null;
             return edgeServers.slice();
+        }).catch(function (error) {
+            console.warn('[' + SCRIPT_NAME + '] Edge 代理探活失败：', error);
+            return edgeServers.slice();
+        }).then(function (result) {
+            edgePingPromise = null;
+            return result;
         });
         return edgePingPromise;
     }
@@ -583,6 +649,26 @@
         return /Failed to fetch|NetworkError|Load failed/i.test(String((error && error.message) || error || ''));
     }
 
+    /** 用户取消：真实 fetch 被 abort 抛 DOMException(name=AbortError)，自造的中止错误用「已取消」文案 */
+    function isAbortError(error) {
+        if (!error) return false;
+        if (String(error.name || '') === 'AbortError') return true;
+        return String(error.message || error || '').indexOf('已取消') !== -1;
+    }
+
+    /**
+     * 失败是否值得原样重试一次：只认网络层失败、超时与 5xx/429/408；
+     * 凭据缺失、业务码错误、内容过滤、代理全挂、用户取消都不重试。
+     */
+    function isRetryableTtsError(error) {
+        if (isAbortError(error)) return false;
+        const message = String((error && error.message) || error || '');
+        if (/未配置|均需配置|内容过滤|无法访问|全部不可用|未返回|已不存在|已丢失/.test(message)) return false;
+        const http = message.match(/HTTP\s+(\d{3})/);
+        if (http) return Number(http[1]) >= 500 || http[1] === '429' || http[1] === '408';
+        return true;
+    }
+
     /** Edge 合成参数：对象上带角色级取值时优先，缺失则回落到音频设置里的全局默认。对 request 与 voice 配置都适用 */
     function edgeSpeechParams(source) {
         const cfg = ttsConfig.edge;
@@ -598,10 +684,11 @@
     }
 
     function synthesizeEdgeVia(serverUrl, label, text, request) {
-        return fetchWithTimeout(buildEdgeUrl(serverUrl, text, request.voiceId, edgeSpeechParams(request), request.style), { headers: { Accept: 'audio/*' } }, 15000)
+        return fetchWithTimeout(buildEdgeUrl(serverUrl, text, request.voiceId, edgeSpeechParams(request), request.style), { headers: { Accept: 'audio/*' } }, 15000, request.signal)
             .then(ensureAudioResponse)
             .then(function (blob) { return { blob: blob, mime: blob.type || 'audio/mpeg', server: label }; })
             .catch(function (error) {
+                if (isAbortError(error)) throw error;
                 if (!isFetchBlocked(error)) throw error;
                 throw new Error('代理「' + label + '」无法访问（已下线或被浏览器拦截）');
             });
@@ -616,10 +703,13 @@
         const tried = {};
         let lastError = null;
         function tryList(servers) {
+            // 取消后不再逐个代理重试，也不把被中止的请求算作代理故障
+            if (request.signal && request.signal.aborted) return Promise.reject(new Error('已取消'));
             const server = servers.filter(function (s) { return !tried[s.url]; })[0];
             if (!server) return Promise.resolve(null);
             tried[server.url] = true;
             return synthesizeEdgeVia(server.url, server.name, text, request).catch(function (error) {
+                if (isAbortError(error)) throw error;
                 lastError = error;
                 markEdgeServerFailed(server);
                 return tryList(servers);
@@ -627,6 +717,7 @@
         }
         return pingEdgeServers(false).then(tryList).then(function (result) {
             if (result) return result;
+            if (request.signal && request.signal.aborted) throw new Error('已取消');
             // 池子试完了 → 强制重探一次，只多试这一轮，避免死循环
             return pingEdgeServers(true).then(tryList).then(function (retried) {
                 if (retried) return retried;
@@ -655,10 +746,12 @@
             output_format: 'hex',
         };
         if (request.emotionParam) body.voice_setting.emotion = request.emotionParam;
+        // 多 Key 轮换未启用：填了多个 Key 时当前只用第一个，失败由上层统一重试一次；
+        // 若要逐 Key 轮换，在此按 keys.length 循环调用 attempt()。
         let index = 0;
         function attempt() {
             const key = keys[index++ % keys.length];
-            return fetchWithTimeout(base + '/t2a_v2', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 30000)
+            return fetchWithTimeout(base + '/t2a_v2', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 30000, request.signal)
                 .then(function (response) {
                     if (!response.ok) throw new Error('MiniMax HTTP ' + response.status);
                     return response.json();
@@ -682,7 +775,9 @@
 
     function synthesizeDoubao(text, request) {
         const cfg = ttsConfig.doubao;
-        if (!cfg.appId || !cfg.accessKey || !request.voiceId || !request.resourceId) return Promise.reject(new Error('豆包 App ID、Access Key、音色和 Resource ID 均需配置'));
+        if (!cfg.appId || !cfg.accessKey || !request.voiceId) return Promise.reject(new Error('豆包 App ID、Access Key 和音色均需配置'));
+        // Resource ID 内置：老配置里为空/缺失时回落到语音合成 2.0，用户无需手输
+        const resourceId = String(request.resourceId || '').trim() || DOUBAO_DEFAULT_RESOURCE;
         const payload = {
             user: { uid: cfg.uid || '1222356' },
             req_params: {
@@ -693,9 +788,9 @@
         };
         return fetchWithTimeout('https://openspeech.bytedance.com/api/v3/tts/unidirectional', {
             method: 'POST',
-            headers: { 'X-Api-App-Key': cfg.appId, 'X-Api-Access-Key': cfg.accessKey, 'X-Api-Resource-Id': request.resourceId, 'Content-Type': 'application/json' },
+            headers: { 'X-Api-App-Key': cfg.appId, 'X-Api-Access-Key': cfg.accessKey, 'X-Api-Resource-Id': resourceId, 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-        }, 30000).then(function (response) {
+        }, 30000, request.signal).then(function (response) {
             if (!response.ok) throw new Error('豆包 HTTP ' + response.status);
             return response.text();
         }).then(function (raw) {
@@ -782,7 +877,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'api-key': key, Authorization: 'Bearer ' + key },
                 body: JSON.stringify(body),
-            }, 30000);
+            }, 30000, request.signal);
         }).then(function (response) {
             if (!response.ok) throw new Error('MiMo HTTP ' + response.status);
             return response.json();
@@ -800,12 +895,25 @@
         });
     }
 
+    /** 合成分派：失败时对同一引擎自动重试一次（间隔 500ms），仍失败才把错误交给上层 */
     function synthesizeTts(text, request) {
-        if (request.engine === 'edge') return synthesizeEdge(text, request);
-        if (request.engine === 'minimax') return synthesizeMinimax(text, request);
-        if (request.engine === 'doubao') return synthesizeDoubao(text, request);
-        if (request.engine === 'mimo') return synthesizeMimo(text, request);
-        return Promise.reject(new Error('未知语音引擎'));
+        const engine = request.engine;
+        if (TTS_ENGINES.indexOf(engine) === -1) return Promise.reject(new Error('未知语音引擎'));
+        const run = function () {
+            if (engine === 'edge') return synthesizeEdge(text, request);
+            if (engine === 'minimax') return synthesizeMinimax(text, request);
+            if (engine === 'doubao') return synthesizeDoubao(text, request);
+            return synthesizeMimo(text, request);
+        };
+        return run().catch(function (error) {
+            if (!isRetryableTtsError(error)) throw error;
+            if (request.signal && request.signal.aborted) throw error;
+            dbg('合成失败，' + TTS_RETRY_DELAY_MS + 'ms 后重试一次：' + String((error && error.message) || error));
+            return new Promise(function (resolve) { setTimeout(resolve, TTS_RETRY_DELAY_MS); }).then(function () {
+                if (request.signal && request.signal.aborted) throw new Error('已取消');
+                return run();
+            });
+        });
     }
 
     function shouldPersist(engine) { return !!(ttsConfig[engine] && ttsConfig[engine].persist); }
@@ -973,7 +1081,16 @@
         doc.querySelectorAll('.eca-avatar.eca-audio-loading, .eca-avatar.eca-audio-playing, .eca-audio-btn').forEach(resetAudioButton);
     }
 
+    /**
+     * 停止播放并作废在途合成：代际号自增让迟到的成功/失败都无法落地（否则会出现
+     * 无按钮可停的幽灵播放、以及取消后仍弹出的失败提示），同时真正中断在途请求。
+     */
     function stopCurrentAudio() {
+        audioRequestSeq++;
+        if (currentTtsAbort) {
+            try { currentTtsAbort.abort(); } catch (e) { /* 已中止 */ }
+            currentTtsAbort = null;
+        }
         if (currentAudio) {
             try { currentAudio.pause(); } catch (e) { /* 已停止 */ }
             currentAudio.onended = null;
@@ -995,23 +1112,35 @@
         avatar.classList.add(currentAudioState.phase === 'playing' ? 'eca-audio-playing' : 'eca-audio-loading');
     }
 
-    function playAvatarSpeech(button, avatar) {
-        const targetAvatar = avatar || button;
-        if (!targetAvatar) return;
-        if (currentAudioButton === targetAvatar && (currentAudio || targetAvatar.classList.contains('eca-audio-loading'))) {
-            stopCurrentAudio();
-            return;
-        }
-        stopCurrentAudio();
-        const speech = getAvatarSpeech(targetAvatar);
-        if (!speech) return;
-        const voice = getVoiceConfig(speech.name);
-        if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
-        if (TTS_ENGINES.indexOf(voice.engine) === -1) { toast('语音引擎配置无效，请重新选择', true); return; }
+    /** 当前播放/合成的是否就是这段语音：头像在流式重渲染中被重建时，元素身份会变，必须按内容判定 */
+    function isCurrentSpeech(speech) {
+        return !!(speech && currentAudioState && currentAudioState.name === speech.name && currentAudioState.text === speech.text);
+    }
+
+    /** 播放与长按共用同一套请求装配，保证两处算出的缓存键完全一致 */
+    function buildSpeechRequest(speech, voice) {
         const emotionRequest = buildEmotionRequest(voice.engine, speech.emotion, voice.voiceId);
         const request = Object.assign({ engine: voice.engine, voiceId: voice.voiceId, resourceId: voice.resourceId || '', text: speech.text, emotion: speech.emotion, platform: voice.engine === 'minimax' ? ttsConfig.minimax.platform : '', model: voice.engine === 'minimax' ? ttsConfig.minimax.model : (voice.engine === 'mimo' ? ttsConfig.mimo.model : '') }, emotionRequest);
         // 把生效的语速/音调/音量固化进 request：既供合成使用，也进缓存键，避免改了参数还回放旧音频
         if (voice.engine === 'edge') Object.assign(request, edgeSpeechParams(voice));
+        return request;
+    }
+
+    function playAvatarSpeech(button, avatar) {
+        const targetAvatar = avatar || button;
+        if (!targetAvatar) return;
+        const speech = getAvatarSpeech(targetAvatar);
+        const stopping = (currentAudioButton === targetAvatar || isCurrentSpeech(speech)) && (currentAudio || targetAvatar.classList.contains('eca-audio-loading'));
+        if (stopping) { stopCurrentAudio(); return; }
+        stopCurrentAudio();
+        if (!speech) { toast('这一段没有可朗读的对白（需要成对的引号）', true); return; }
+        const voice = getVoiceConfig(speech.name);
+        if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
+        if (TTS_ENGINES.indexOf(voice.engine) === -1) { toast('语音引擎配置无效，请重新选择', true); return; }
+        const request = buildSpeechRequest(speech, voice);
+        const abort = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
+        if (abort) request.signal = abort.signal;
+        currentTtsAbort = abort;
         targetAvatar.classList.add('eca-audio-loading');
         currentAudioButton = targetAvatar;
         currentAudioState = { name: speech.name, text: speech.text, phase: 'loading' };
@@ -1032,11 +1161,71 @@
             const playResult = audio.play();
             if (playResult && typeof playResult.catch === 'function') playResult.catch(function () { if (currentAudio === audio) { stopCurrentAudio(); toast('浏览器阻止了音频播放，请再次点击', true); } });
         }).catch(function (error) {
-            if (seq !== audioRequestSeq) return;
+            if (seq !== audioRequestSeq) {
+                // 已被取消或被新的请求顶替：错误不再无声消失，进排障日志备查
+                dbg('被顶替的合成请求结束（不提示用户）：' + String((error && error.message) || error || '未知错误'));
+                return;
+            }
             stopCurrentAudio();
             const detail = String((error && error.message) || error || '未知错误');
             toast('语音生成失败：' + (isFetchBlocked(error) ? '网络请求被拦截（CORS 或网络不通），请检查网络或代理设置' : detail) + '（可重试）', true);
         });
+    }
+
+    // ---------- 长按 / 鼠标长按：清掉该段持久化缓存并重新生成 ----------
+    function cancelLongPress() {
+        if (longPressTimer !== null) { clearTimeout(longPressTimer); longPressTimer = null; }
+        longPressTarget = null;
+    }
+
+    function onAvatarPointerDown(event) {
+        if (event.button !== undefined && event.button !== 0 && event.pointerType !== 'touch') return;
+        const avatar = event.currentTarget;
+        cancelLongPress();
+        longPressTarget = avatar;
+        longPressStartX = Number(event.clientX) || 0;
+        longPressStartY = Number(event.clientY) || 0;
+        longPressTimer = setTimeout(function () {
+            longPressTimer = null;
+            const target = longPressTarget;
+            cancelLongPress();
+            if (!target || !settings.ttsEnabled) return;
+            if (target.isConnected === false) return; // 期间被重扫重建，旧元素已脱离文档
+            longPressFiredAt = Date.now();
+            if (typeof navigator !== 'undefined' && navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* 无振动支持 */ } }
+            clearAvatarSpeechCache(target);
+        }, LONG_PRESS_MS);
+    }
+
+    function onAvatarPointerMove(event) {
+        if (longPressTimer === null) return;
+        const dx = (Number(event.clientX) || 0) - longPressStartX;
+        const dy = (Number(event.clientY) || 0) - longPressStartY;
+        if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_PX) cancelLongPress();
+    }
+
+    /** 长按动作：该段有持久化缓存才提供「清缓存重生成」，没有则只提示 */
+    function clearAvatarSpeechCache(avatar) {
+        const speech = getAvatarSpeech(avatar);
+        if (!speech) { toast('这一段没有可朗读的对白（需要成对的引号）', true); return; }
+        const voice = getVoiceConfig(speech.name);
+        if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
+        if (TTS_ENGINES.indexOf(voice.engine) === -1) { toast('语音引擎配置无效，请重新选择', true); return; }
+        const key = buildTtsKey(buildSpeechRequest(speech, voice));
+        // 直接查库，不受持久化开关影响：开关关掉后老记录仍在，长按要能清掉它
+        ttsGet(key).then(function (record) {
+            if (!record) { toast('这一段没有持久化缓存，无需清理', true); return; }
+            const snippet = speech.text.length > 24 ? speech.text.slice(0, 24) + '…' : speech.text;
+            const tip = '清除「' + speech.name + '」这一段的持久化缓存并重新生成？\n\n对白：' + snippet + '\n引擎：' + voice.engine + ' · 音色：' + voice.voiceId;
+            if (!uiConfirm(tip)) return;
+            return ttsDelete(key).then(function () {
+                ttsMemoryCache.delete(key);
+                toast('已清除该段缓存，正在重新生成');
+                // 先停掉可能在播/在飞的旧音频，否则 playAvatarSpeech 会把这次点击当成「再点停止」
+                stopCurrentAudio();
+                playAvatarSpeech(avatar);
+            }, function (error) { toast('清除缓存失败：' + (error && error.message || error), true); });
+        }).catch(function (error) { toast('读取缓存失败：' + (error && error.message || error), true); });
     }
 
     function positionAudioButton() {
@@ -1055,6 +1244,7 @@
         avatars.forEach(function (avatar) {
             if (!settings.ttsEnabled || !isAiFloor) {
                 avatar.classList.remove('eca-has-speech', 'eca-audio-loading', 'eca-audio-playing');
+                cancelLongPress();
                 if (avatar.dataset.ecaAudioBound) {
                     delete avatar.dataset.ecaAudioBound;
                 }
@@ -1066,7 +1256,7 @@
                 return;
             }
             avatar.classList.add('eca-has-speech');
-            avatar.title = '点击播放「' + speech.name + '」对白';
+            avatar.title = '点击播放「' + speech.name + '」对白 · 长按清缓存重生成';
             avatar.setAttribute('aria-label', avatar.title);
             applyAudioStateToAvatar(avatar, speech);
 
@@ -1074,9 +1264,27 @@
                 avatar.dataset.ecaAudioBound = '1';
                 avatar.addEventListener('click', function (event) {
                     if (!settings.ttsEnabled) return;
+                    if (Date.now() - longPressFiredAt < LONG_PRESS_CLICK_GUARD_MS) {
+                        // 长按刚触发过：这一下是长按松手带出来的 click，不能当成播放/停止
+                        event.preventDefault();
+                        event.stopPropagation();
+                        return;
+                    }
                     event.preventDefault();
                     event.stopPropagation();
                     playAvatarSpeech(avatar);
+                });
+                avatar.addEventListener('pointerdown', onAvatarPointerDown);
+                avatar.addEventListener('pointermove', onAvatarPointerMove);
+                avatar.addEventListener('pointerup', cancelLongPress);
+                avatar.addEventListener('pointercancel', cancelLongPress);
+                avatar.addEventListener('pointerleave', cancelLongPress);
+                avatar.addEventListener('contextmenu', function (event) {
+                    // 只挡「长按自己的菜单」，正常右键菜单不受影响
+                    if (longPressTarget === avatar || Date.now() - longPressFiredAt < LONG_PRESS_CLICK_GUARD_MS) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
                 });
             }
         });
@@ -1091,7 +1299,7 @@
         + 'max-width:calc(var(--eca-size,2.5em)*1.6);object-fit:cover;vertical-align:text-bottom;'
         + 'margin:0 .18em;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.22);'
         + 'transition:box-shadow .2s ease,transform .15s ease;}'
-        + '.eca-avatar.eca-has-speech{cursor:pointer;}'
+        + '.eca-avatar.eca-has-speech{cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}'
         + '.eca-avatar.eca-has-speech:hover{box-shadow:0 2px 8px rgba(195,152,77,.35),0 0 0 1px rgba(195,152,77,.55);transform:translateY(-1px);}'
         // 加载态：头像周围暖金微光呼吸闪烁
         + '.eca-avatar.eca-audio-loading{animation:eca-avatar-glow 1.2s ease-in-out infinite alternate;}'
@@ -2157,6 +2365,28 @@
         return preset + cloneGroup + (known || !selectedId ? '' : '<option value="' + escapeHtml(selectedId) + '" selected>' + escapeHtml(selectedId + '（自定义）') + '</option>');
     }
 
+    /** 豆包音色：内置官方音色下拉 + 「✎ 自定义」手填；老配置里的非内置音色保留为可选项 */
+    const DOUBAO_CUSTOM_VALUE = '__custom__';
+
+    function doubaoVoiceOptionsHtml(selectedId) {
+        const preset = DOUBAO_VOICES.map(function (voice) {
+            return '<option value="' + escapeHtml(voice.id) + '"' + (selectedId === voice.id ? ' selected' : '') + '>' + escapeHtml(voice.name) + '</option>';
+        }).join('');
+        const known = DOUBAO_VOICES.some(function (v) { return v.id === selectedId; });
+        const legacy = !known && selectedId ? '<option value="' + escapeHtml(selectedId) + '" selected>' + escapeHtml(selectedId + '（自定义）') + '</option>' : '';
+        return preset + legacy + '<option value="' + DOUBAO_CUSTOM_VALUE + '">✎ 自定义…</option>';
+    }
+
+    /** 豆包 Resource ID：内置两项，空值回落语音合成 2.0；历史自定义值补一项以免丢配置 */
+    function doubaoResourceOptionsHtml(selectedId) {
+        const value = String(selectedId || '').trim() || DOUBAO_DEFAULT_RESOURCE;
+        const known = DOUBAO_RESOURCES.some(function (r) { return r.id === value; });
+        const legacy = known ? '' : '<option value="' + escapeHtml(value) + '" selected>' + escapeHtml(value + '（自定义）') + '</option>';
+        return DOUBAO_RESOURCES.map(function (r) {
+            return '<option value="' + escapeHtml(r.id) + '"' + (value === r.id ? ' selected' : '') + '>' + escapeHtml(r.name + ' · ' + r.id) + '</option>';
+        }).join('') + legacy;
+    }
+
     /** 按引擎隔离显示：只露出当前引擎自己的字段，避免 Edge 音色串进 MiMo 下拉这类混淆 */
     function openVoiceSettings(name) {
         if (!name) return;
@@ -2168,13 +2398,20 @@
             + '<div class="eca-audio-row" data-eca-for="edge"><label>Edge 音色</label><select id="eca-edge-voice">' + edgeVoiceOptionsHtml(currentEngine === 'edge' ? current.voiceId : '') + '</select></div>'
             + '<div class="eca-audio-row" data-eca-for="edge"><label>语速 %</label><input type="number" id="eca-edge-rate" min="-50" max="50" step="1" value="' + params.rate + '"><label>音调 Hz</label><input type="number" id="eca-edge-pitch" min="-50" max="50" step="1" value="' + params.pitch + '"><span class="eca-audio-tip">仅本角色生效，初始值取自音频设置的全局默认</span></div>'
             + '<div class="eca-audio-row" data-eca-for="mimo"><label>MiMo 音色</label><select id="eca-mimo-voice">' + mimoVoiceOptionsHtml(currentEngine === 'mimo' ? current.voiceId : '') + '</select></div>'
-            + '<div class="eca-audio-row" data-eca-for="minimax doubao"><label>音色 ID</label><input id="eca-voice-id" value="' + escapeHtml(currentEngine === 'minimax' || currentEngine === 'doubao' ? current.voiceId : '') + '" placeholder="MiniMax voice_id / 豆包 speaker"></div>'
-            + '<div class="eca-audio-row" data-eca-for="doubao"><label>豆包 Resource ID</label><input id="eca-resource-id" value="' + escapeHtml(current.resourceId || '') + '" placeholder="如 seed-tts-2.0"></div>';
+            + '<div class="eca-audio-row" data-eca-for="minimax"><label>音色 ID</label><input id="eca-voice-id" value="' + escapeHtml(currentEngine === 'minimax' ? current.voiceId : '') + '" placeholder="MiniMax voice_id"></div>'
+            + '<div class="eca-audio-row" data-eca-for="doubao"><label>豆包音色</label><select id="eca-doubao-voice">' + doubaoVoiceOptionsHtml(currentEngine === 'doubao' ? current.voiceId : '') + '</select><input id="eca-doubao-custom" value="' + escapeHtml(currentEngine === 'doubao' ? current.voiceId : '') + '" placeholder="自定义 speaker id" style="display:none"></div>'
+            + '<div class="eca-audio-row" data-eca-for="doubao"><label>Resource ID</label><select id="eca-resource-id">' + doubaoResourceOptionsHtml(currentEngine === 'doubao' ? current.resourceId : '') + '</select><span class="eca-audio-tip">已内置，无需手填</span></div>';
         const root = audioModal('eca-voice-settings', '语音设置 · ' + escapeHtml(name), body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-voice-save">保存</button>');
         const engineSelect = root.querySelector('#eca-voice-engine');
         const edgeSelect = root.querySelector('#eca-edge-voice');
         const mimoSelect = root.querySelector('#eca-mimo-voice');
         const voiceInput = root.querySelector('#eca-voice-id');
+        const doubaoSelect = root.querySelector('#eca-doubao-voice');
+        const doubaoCustom = root.querySelector('#eca-doubao-custom');
+        const syncDoubaoUi = function () {
+            doubaoCustom.style.display = doubaoSelect.value === DOUBAO_CUSTOM_VALUE ? '' : 'none';
+        };
+        doubaoSelect.addEventListener('change', syncDoubaoUi); syncDoubaoUi();
         const syncVoiceUi = function () {
             const value = engineSelect.value;
             root.querySelectorAll('[data-eca-for]').forEach(function (row) {
@@ -2187,13 +2424,15 @@
             let voiceId = '';
             if (engineValue === 'edge') voiceId = edgeSelect.value;
             else if (engineValue === 'mimo') voiceId = mimoSelect.value;
+            else if (engineValue === 'doubao') voiceId = doubaoSelect.value === DOUBAO_CUSTOM_VALUE ? String(doubaoCustom.value || '').trim() : doubaoSelect.value;
             else voiceId = String(voiceInput.value || '').trim();
             const value = { engine: engineValue, voiceId: voiceId, resourceId: root.querySelector('#eca-resource-id').value.trim() };
             if (engineValue === 'edge') {
                 value.rate = root.querySelector('#eca-edge-rate').value.trim();
                 value.pitch = root.querySelector('#eca-edge-pitch').value.trim();
             }
-            if (!value.voiceId || (engineValue === 'doubao' && !value.resourceId)) { toast('请填写音色 ID；豆包还需要 Resource ID', true); return; }
+            if (engineValue === 'doubao' && !value.resourceId) value.resourceId = DOUBAO_DEFAULT_RESOURCE;
+            if (!value.voiceId) { toast(engineValue === 'doubao' ? '请选择豆包音色（或选「自定义」后填写 speaker id）' : '请填写音色 ID', true); return; }
             setVoiceConfig(name, value); root.style.display = 'none'; refreshAudioButtons(); toast('已保存「' + name + '」的语音配置');
         });
     }
@@ -2223,6 +2462,18 @@
             + '<div class="eca-audio-section"><h4>MiMo（小米）</h4><div class="eca-audio-tip">在 api.xiaomimimo.com 申请 API Key；每个角色的音色在「语音设置」里选。可上传参考音频做音色复刻（见下方），voicedesign 文字描述音色未支持。</div><div class="eca-audio-row"><label>API Key</label><input type="password" id="eca-mimo-key" value="' + escapeHtml(c.mimo.apiKey) + '"></div><div class="eca-audio-row"><label>Base URL</label><input id="eca-mimo-base" value="' + escapeHtml(c.mimo.baseUrl) + '"></div><div class="eca-audio-row"><label>模型</label><input id="eca-mimo-model" value="' + escapeHtml(c.mimo.model) + '"></div><div class="eca-audio-row"><label>格式</label><select id="eca-mimo-format"><option value="wav"' + (c.mimo.format === 'wav' ? ' selected' : '') + '>wav</option><option value="mp3"' + (c.mimo.format === 'mp3' ? ' selected' : '') + '>mp3</option></select></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-mimo-persist"' + (c.mimo.persist ? ' checked' : '') + '><span>默认开启</span></div><div class="eca-audio-row"><label>复刻音色</label></div><div class="eca-cache-list" id="eca-mimo-clones"></div><div class="eca-audio-row"><label>新增复刻</label><input id="eca-mimo-clone-nick" placeholder="音色昵称"><button type="button" id="eca-mimo-clone-pick">选择参考音频</button><button type="button" id="eca-mimo-clone-add">添加</button><input type="file" id="eca-mimo-clone-file" accept="audio/*" style="display:none"><span class="eca-audio-tip" id="eca-mimo-clone-file-label">未选择文件（≤10MB）</span></div></div>'
             + '<div class="eca-audio-section"><h4>缓存清理</h4><div class="eca-audio-row"><label>保留天数</label><input type="number" id="eca-cache-days" min="1" value="' + c.cacheDays + '"><label>最大条数</label><input type="number" id="eca-cache-count" min="1" value="' + c.cacheMaxEntries + '"><label>最大 MB</label><input type="number" id="eca-cache-mb" min="1" value="' + c.cacheMaxMb + '"></div></div>';
         const root = audioModal('eca-audio-settings', '音频设置', body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-tts-save">保存</button>');
+        // 持久化开关即时落盘：弹窗的 ×／遮罩／取消都不提交表单，开关必须自己生效，
+        // 否则「关了持久化、刷新后照样命中」会一直成立
+        [['#eca-edge-persist', 'edge'], ['#eca-mm-persist', 'minimax'], ['#eca-db-persist', 'doubao'], ['#eca-mimo-persist', 'mimo']].forEach(function (pair) {
+            const box = root.querySelector(pair[0]);
+            const engine = pair[1];
+            if (!box) return;
+            box.addEventListener('change', function () {
+                ttsConfig[engine].persist = box.checked;
+                persistTtsConfig();
+                toast(ttsEngineLabel(engine) + ' 持久化已' + (box.checked ? '开启' : '关闭') + (box.checked ? '' : '（既有缓存保留，可在「语音缓存」里删除）'));
+            });
+        });
         const pingBtn = root.querySelector('#eca-edge-ping');
         pingBtn.addEventListener('click', function () {
             const status = root.querySelector('#eca-edge-ping-status');
@@ -2279,12 +2530,21 @@
 
     function openTtsCachePanel() {
         ttsGetAll().then(function (records) {
+            audioEntries.clear();
             records.sort(function (a, b) { return b.createdAt - a.createdAt; });
+            const offSummary = TTS_ENGINES.filter(function (engine) { return !shouldPersist(engine); }).map(function (engine) {
+                const n = records.filter(function (r) { return r.engine === engine; }).length;
+                return ttsEngineLabel(engine) + (n ? '（既有 ' + n + ' 条）' : '');
+            }).join('、');
             const rows = records.length ? records.map(function (record) {
                 const id = 'eca-cache-' + (audioEntrySeq++); audioEntries.set(id, record);
-                return '<div class="eca-cache-item"><div class="eca-cache-meta"><div class="eca-cache-text" title="' + escapeHtml(record.text) + '">' + escapeHtml(record.text) + '</div><div class="eca-cache-sub">' + escapeHtml(record.engine) + ' · ' + escapeHtml(record.voiceId) + ' · ' + formatBytes(record.size || record.blob.size) + ' · ' + new Date(record.createdAt).toLocaleString() + '</div></div><button class="eca-cache-action" data-cache-play="' + id + '">▶</button><button class="eca-cache-action" data-cache-download="' + id + '">⬇</button><button class="eca-cache-action" data-cache-delete="' + id + '">✕</button></div>';
+                const offTag = shouldPersist(record.engine) ? '' : '（已停用）';
+                return '<div class="eca-cache-item"><div class="eca-cache-meta"><div class="eca-cache-text" title="' + escapeHtml(record.text) + '">' + escapeHtml(record.text) + '</div><div class="eca-cache-sub">' + escapeHtml(record.engine) + offTag + ' · ' + escapeHtml(record.voiceId) + ' · ' + formatBytes(record.size || record.blob.size) + ' · ' + new Date(record.createdAt).toLocaleString() + '</div></div><button class="eca-cache-action" data-cache-play="' + id + '">▶</button><button class="eca-cache-action" data-cache-download="' + id + '">⬇</button><button class="eca-cache-action" data-cache-delete="' + id + '">✕</button></div>';
             }).join('') : '<div class="eca-audio-tip">暂无持久化音频。</div>';
-            const root = audioModal('eca-cache-panel', '语音缓存', '<div class="eca-audio-tip">共 ' + records.length + ' 条，Edge 默认不写入这里。</div><div class="eca-cache-list">' + rows + '</div>', '<button type="button" id="eca-cache-prune">清理过期</button><button type="button" id="eca-cache-clear">清空全部</button><button type="button" data-audio-close>关闭</button>');
+            const tip = offSummary
+                ? '共 ' + records.length + ' 条。持久化已关闭：' + offSummary + '——不再写入也不再命中，既有条目仍保留在此，需手动删除。'
+                : '共 ' + records.length + ' 条，所有引擎的持久化均为开启状态。';
+            const root = audioModal('eca-cache-panel', '语音缓存', '<div class="eca-audio-tip">' + escapeHtml(tip) + '</div><div class="eca-cache-list">' + rows + '</div>', '<button type="button" id="eca-cache-prune">清理过期</button><button type="button" id="eca-cache-clear">清空全部</button><button type="button" data-audio-close>关闭</button>');
             root.addEventListener('click', function (ev) {
                 const play = ev.target.closest && ev.target.closest('[data-cache-play]');
                 const download = ev.target.closest && ev.target.closest('[data-cache-download]');
