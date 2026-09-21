@@ -140,8 +140,18 @@ function __btn(label, fn, warn) {
  * ============================================================ */
 window.__fetchCalls = [];
 window.__fetchMode = 'ok';
+window.__failHosts = [];
 window.__fakeAudioBytes = [73, 68, 51, 4, 0, 0, 0, 0];
 function __audioBlob() { return new Blob([new Uint8Array(window.__fakeAudioBytes)], { type: 'audio/mpeg' }); }
+function __failResponse() {
+  return Promise.resolve({
+    ok: false, status: 500,
+    headers: { get: function () { return null; } },
+    blob: function () { return Promise.resolve(new Blob()); },
+    json: function () { return Promise.resolve({}); },
+    text: function () { return Promise.resolve('server error'); },
+  });
+}
 window.fetch = function (url, options) {
   var opts = options || {};
   var rec = { url: String(url), method: opts.method || 'GET', headers: opts.headers || {}, body: null };
@@ -151,14 +161,9 @@ window.fetch = function (url, options) {
   }
   window.__fetchCalls.push(rec);
   var u = String(url);
-  if (window.__fetchMode === 'fail') {
-    return Promise.resolve({
-      ok: false, status: 500,
-      headers: { get: function () { return null; } },
-      blob: function () { return Promise.resolve(new Blob()); },
-      json: function () { return Promise.resolve({}); },
-      text: function () { return Promise.resolve('server error'); },
-    });
+  if (window.__fetchMode === 'fail') return __failResponse();
+  for (var i = 0; i < window.__failHosts.length; i++) {
+    if (u.indexOf(window.__failHosts[i]) !== -1) return __failResponse();
   }
   if (u.indexOf('/t2a_v2') !== -1) {
     return Promise.resolve({
@@ -249,7 +254,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.3.0', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.3.1', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1435,7 +1440,9 @@ function __ttsReset() {
   window.__audioInstances = [];
   window.__audioPlayCount = 0;
   window.__fetchMode = 'ok';
+  window.__failHosts = [];
   window.EmoAvatar.setTtsEnabled(true);
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: '' } });
 }
 function __buttons(mes) { return mes.querySelectorAll('.eca-audio-btn'); }
 test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', function () {
@@ -1580,7 +1587,8 @@ test('M10-7 豆包：自定义情绪经 context_texts 传递且不读进正文',
 });
 test('M10-8 Edge 不落盘；总开关关闭后按钮消失、开启后恢复', function () {
   __resetChat(); __seedM1(); __ttsReset();
-  window.EmoAvatar.setTtsConfig({ edge: { persist: false } });
+  // 固定代理走单地址模式，避免自动代理池的探活请求混进调用记录
+  window.EmoAvatar.setTtsConfig({ edge: { persist: false, proxyUrl: 'https://example.test/tts' } });
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
   return window.EmoAvatar.clearTtsCache().then(function () {
     var mes = __addFloor('<p>{弗兰克(默认)}“甲。”</p>', false);
@@ -1597,6 +1605,8 @@ test('M10-8 Edge 不落盘；总开关关闭后按钮消失、开启后恢复', 
 });
 test('M10-9 合成失败只提示重试、不切换引擎', function () {
   __resetChat(); __seedM1(); __ttsReset();
+  // 固定代理：单地址模式不做轮换，因此"只尝试一次"仍成立；代理池的轮换行为由 M10-12 覆盖
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.invalid/tts' } });
   window.__fetchMode = 'fail';
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
   var mes = __addFloor('<p>{弗兰克(微笑)}“失败测试。”</p>', false);
@@ -1665,6 +1675,67 @@ test('M10-11 无 p 包裹（移动端兜底）：两个头像各自取自己那�
   var second = window.EmoAvatar.getAvatarSpeech(avatars[1]);
   assert(first && first.text === '甲。', '首个头像文本错误：' + JSON.stringify(first && first.text));
   assert(second && second.text === '乙。', '第二个头像文本错误：' + JSON.stringify(second && second.text));
+});
+
+test('M10-12 自动代理池：探活剔除坏代理，合成失败自动切换下一个', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  var pool = [];
+  var firstHost = '';
+  return window.EmoAvatar.pingEdgeServers(true).then(function (servers) {
+    assert(servers.length >= 2, '全通时应探测到多个代理，实际 ' + servers.length);
+    pool = servers;
+    firstHost = new URL(pool[0].url).host;
+    // 让排名第一的代理在合成阶段失败 → 应自动切到下一个
+    window.__failHosts = [firstHost];
+    window.__fetchCalls = [];
+    var mes = __addFloor('<p>{弗兰克(微笑)}“甲。”</p>', false);
+    window.EmoAvatar.scanAll();
+    __buttons(mes)[0].click();
+    return __wait(200);
+  }).then(function () {
+    assert(window.__audioPlayCount === 1, '轮换后应成功播放，实际播放次数 ' + window.__audioPlayCount);
+    var last = __lastTtsCall('edge');
+    assert(last && last.url.indexOf(firstHost) === -1, '应改用其它代理发起合成，实际仍打到 ' + firstHost);
+    var remaining = window.EmoAvatar.getEdgeServers();
+    assert(remaining.filter(function (s) { return s.url === pool[0].url; }).length === 0, '失败的代理应被摘除');
+    // 探活阶段同样只认 HTTP 200
+    window.__failHosts = ['64.112.42.45'];
+    return window.EmoAvatar.pingEdgeServers(true);
+  }).then(function (refreshed) {
+    assert(refreshed.filter(function (s) { return s.url.indexOf('64.112.42.45') !== -1; }).length === 0, '探活应剔除返回 500 的代理');
+    window.__failHosts = [];
+    return window.EmoAvatar.pingEdgeServers(true).then(function () { });
+  });
+});
+
+test('M10-13 旧默认代理（skybook）自动迁移为「自动选择」', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var migrated = window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://skybook.qzz.io/tts' } });
+  assert(migrated.edge.proxyUrl === '', '已下线的旧默认代理应迁移为空（自动选择），实际 ' + JSON.stringify(migrated.edge.proxyUrl));
+  var kept = window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts' } });
+  assert(kept.edge.proxyUrl === 'https://example.test/tts', '用户自定义代理不应被迁移');
+});
+
+test('M10-14 代理全部不可用时给中文可操作提示，而非浏览器裸报错', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  Array.prototype.forEach.call(document.querySelectorAll('.eca-toast'), function (t) { t.remove(); });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  window.__failHosts = ['/tts'];
+  // 台词与音色须区别于其它用例，否则会命中内存缓存而不发请求
+  var mes = __addFloor('<p>{弗兰克(微笑)}“代理故障用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  btn.click();
+  return __wait(400).then(function () {
+    var toasts = Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
+    assert(toasts.indexOf('Failed to fetch') === -1, '不应把浏览器裸报错透给用户：' + toasts);
+    assert(toasts.indexOf('代理全部不可用') !== -1, '应提示代理全部不可用：' + toasts);
+    assert(__countTtsCalls('minimax') === 0 && __countTtsCalls('doubao') === 0, '失败时不应改走其它引擎');
+    assert(!btn.classList.contains('eca-audio-loading'), '失败后按钮应复位');
+    window.__failHosts = [];
+    return window.EmoAvatar.pingEdgeServers(true).then(function () { });
+  });
 });
 
 /* ---------- 操作按钮 ---------- */

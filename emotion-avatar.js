@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.3.0';
+    const VERSION = '0.3.1';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -59,8 +59,32 @@
         '微笑': 'happy', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'surprised', '轻蔑': 'disgusted',
         '杀意': 'angry', '思考': 'calm', '大笑': 'happy',
     };
+    /** Edge TTS 公开代理池（移植自 st-immersive-sound）。proxyUrl 留空时自动探活择优，失败逐个轮换 */
+    const EDGE_PROXY_SERVERS = [
+        // HTTPS 代理能避开 mixed-content，HTTPS 页面下只有这些可用
+        { name: 'SkyBook', url: 'https://skybook.qzz.io/tts' },
+        { name: '德国法兰克福', url: 'http://5.45.99.149:8075/tts' },
+        { name: '美国洛杉矶', url: 'http://64.112.42.45:9080/tts' },
+        { name: '中国', url: 'http://t.leftsite.cn/tts' },
+        { name: '中国杭州', url: 'http://60.205.243.148:8080/tts' },
+        { name: '韩国首尔', url: 'http://193.122.107.44:9090/tts' },
+        { name: '美国德克萨斯州', url: 'http://104.214.168.83:8080/tts' },
+        { name: '美国纽约', url: 'http://74.48.40.244:8010/tts' },
+        { name: '美国加利福尼亚州', url: 'http://47.79.92.215:18080/tts' },
+        { name: '中国湖北', url: 'http://171.113.113.119:8085/tts' },
+        { name: '中国江苏', url: 'http://47.119.125.172:8080/tts' },
+        { name: '中国广东', url: 'http://36.248.181.23:22335/tts' },
+        { name: '中国上海', url: 'http://124.71.164.73:8085/tts' },
+        { name: '荷兰阿姆斯特丹', url: 'http://146.56.188.115:8080/tts' },
+        { name: '日本东京', url: 'http://180.114.35.250:1080/tts' },
+        { name: '巴西圣保罗', url: 'http://190.92.218.92:8080/tts' },
+    ];
+    /** 曾是默认值但已下线的代理（返回 404 且无 CORS 头），命中时迁移为自动选择 */
+    const LEGACY_EDGE_PROXIES = ['https://skybook.qzz.io/tts'];
+    const EDGE_PING_TIMEOUT = 5000;
+    const EDGE_PING_TTL = 30 * 60 * 1000;
     const DEFAULT_TTS_CONFIG = {
-        edge: { proxyUrl: 'https://skybook.qzz.io/tts', rate: 0, pitch: 0, volume: 100, persist: false },
+        edge: { proxyUrl: '', rate: 0, pitch: 0, volume: 100, persist: false },
         minimax: { apiKey: '', platform: 'cn', model: 'speech-2.8-hd', sampleRate: 32000, persist: true },
         doubao: { appId: '', accessKey: '', uid: '1222356', sampleRate: 24000, persist: true },
         cacheDays: 30, cacheMaxEntries: 200, cacheMaxMb: 512,
@@ -238,6 +262,7 @@
         ['cacheDays', 'cacheMaxEntries', 'cacheMaxMb'].forEach(function (key) {
             if (stored[key] !== undefined) next[key] = Number(stored[key]) || next[key];
         });
+        if (LEGACY_EDGE_PROXIES.indexOf(String(next.edge.proxyUrl || '').trim()) !== -1) next.edge.proxyUrl = '';
         return next;
     }
 
@@ -395,15 +420,119 @@
         return response.blob();
     }
 
+    // ============================================
+    // Edge 代理池：留空 proxyUrl 时自动探活择优，失败逐个轮换
+    // ============================================
+    let edgeServers = [];
+    let edgePingPromise = null;
+
+    /** HTTPS 页面下 HTTP 代理会被 mixed-content 拦掉，探活前先剔除，免得白等超时 */
+    function edgeProxyCandidates() {
+        const isHttps = String(topWindow.location && topWindow.location.protocol) === 'https:';
+        return EDGE_PROXY_SERVERS.filter(function (server) { return !isHttps || server.url.indexOf('https://') === 0; });
+    }
+
+    function restoreEdgePingCache() {
+        const cache = ttsConfig.edge && ttsConfig.edge.pingCache;
+        if (!cache || !Array.isArray(cache.servers) || !cache.pingTime) return 0;
+        if (Date.now() - Number(cache.pingTime) > EDGE_PING_TTL) return 0;
+        edgeServers = cache.servers.filter(function (s) { return s && s.url; }).map(function (s) {
+            return { name: String(s.name || s.url), url: String(s.url), latency: Number(s.latency) || 0 };
+        });
+        return edgeServers.length;
+    }
+
+    function persistEdgePingCache() {
+        ttsConfig.edge.pingCache = {
+            servers: edgeServers.map(function (s) { return { name: s.name, url: s.url, latency: s.latency }; }),
+            pingTime: Date.now(),
+        };
+        persistTtsConfig();
+    }
+
+    function markEdgeServerFailed(server) {
+        const index = edgeServers.findIndex(function (s) { return s.url === server.url; });
+        if (index === -1) return;
+        edgeServers.splice(index, 1);
+        persistEdgePingCache();
+    }
+
+    /**
+     * 并发探活全部候选代理，返回按延迟升序的可用列表。
+     * 只认 response.ok：这一条同时滤掉 404（端点已下线）与缺 CORS 头被浏览器拦截两类死法。
+     */
+    function pingEdgeServers(force) {
+        if (edgePingPromise) return edgePingPromise;
+        if (!force && edgeServers.length) return Promise.resolve(edgeServers.slice());
+        if (!force && restoreEdgePingCache()) return Promise.resolve(edgeServers.slice());
+        const probeCfg = { rate: 0, pitch: 0, volume: 100 };
+        edgePingPromise = Promise.all(edgeProxyCandidates().map(function (server) {
+            const start = dbgNow();
+            return fetchWithTimeout(buildEdgeUrl(server.url, '测试', 'zh-CN-XiaoxiaoNeural', probeCfg, 'general'), { headers: { Accept: 'audio/*' } }, EDGE_PING_TIMEOUT)
+                .then(function (response) {
+                    return response && response.ok ? { name: server.name, url: server.url, latency: dbgNow() - start } : null;
+                })
+                .catch(function () { return null; });
+        })).then(function (results) {
+            edgeServers = results.filter(Boolean).sort(function (a, b) { return a.latency - b.latency; });
+            persistEdgePingCache();
+            edgePingPromise = null;
+            return edgeServers.slice();
+        });
+        return edgePingPromise;
+    }
+
+    function buildEdgeUrl(baseUrl, text, voiceId, cfg, style) {
+        const params = new URLSearchParams();
+        params.set('t', text); params.set('v', voiceId);
+        params.set('r', String(Number(cfg.rate) || 0)); params.set('p', String(Number(cfg.pitch) || 0));
+        params.set('s', style || 'general'); params.set('vol', String(Number(cfg.volume) || 100));
+        return baseUrl + (baseUrl.indexOf('?') === -1 ? '?' : '&') + params.toString();
+    }
+
+    /** fetch 的网络层失败（CORS 拦截 / 连接不通）在浏览器里都是同一句 "Failed to fetch"，这里换成能照着做的中文 */
+    function isFetchBlocked(error) {
+        return /Failed to fetch|NetworkError|Load failed/i.test(String((error && error.message) || error || ''));
+    }
+
+    function synthesizeEdgeVia(serverUrl, label, text, request, cfg) {
+        return fetchWithTimeout(buildEdgeUrl(serverUrl, text, request.voiceId, cfg, request.style), { headers: { Accept: 'audio/*' } }, 15000)
+            .then(ensureAudioResponse)
+            .then(function (blob) { return { blob: blob, mime: blob.type || 'audio/mpeg', server: label }; })
+            .catch(function (error) {
+                if (!isFetchBlocked(error)) throw error;
+                throw new Error('代理「' + label + '」无法访问（已下线或被浏览器拦截）');
+            });
+    }
+
+    /** 自定义地址 = 固定单地址、不轮换；留空 = 自动代理池 */
     function synthesizeEdge(text, request) {
         const cfg = ttsConfig.edge;
-        if (!cfg.proxyUrl || !request.voiceId) return Promise.reject(new Error('Edge 音色或代理地址未配置'));
-        const params = new URLSearchParams();
-        params.set('t', text); params.set('v', request.voiceId);
-        params.set('r', String(Number(cfg.rate) || 0)); params.set('p', String(Number(cfg.pitch) || 0));
-        params.set('s', request.style || 'general'); params.set('vol', String(Number(cfg.volume) || 100));
-        return fetchWithTimeout(cfg.proxyUrl + (cfg.proxyUrl.indexOf('?') === -1 ? '?' : '&') + params.toString(), { headers: { Accept: 'audio/*' } }, 15000)
-            .then(ensureAudioResponse).then(function (blob) { return { blob: blob, mime: blob.type || 'audio/mpeg' }; });
+        if (!request.voiceId) return Promise.reject(new Error('Edge 音色未配置'));
+        const custom = String(cfg.proxyUrl || '').trim();
+        if (custom) return synthesizeEdgeVia(custom, custom, text, request, cfg);
+
+        const tried = {};
+        let lastError = null;
+        function tryList(servers) {
+            const server = servers.filter(function (s) { return !tried[s.url]; })[0];
+            if (!server) return Promise.resolve(null);
+            tried[server.url] = true;
+            return synthesizeEdgeVia(server.url, server.name, text, request, cfg).catch(function (error) {
+                lastError = error;
+                markEdgeServerFailed(server);
+                return tryList(servers);
+            });
+        }
+        return pingEdgeServers(false).then(tryList).then(function (result) {
+            if (result) return result;
+            // 池子试完了 → 强制重探一次，只多试这一轮，避免死循环
+            return pingEdgeServers(true).then(tryList).then(function (retried) {
+                if (retried) return retried;
+                if (lastError) console.warn('[' + SCRIPT_NAME + '] Edge 代理全部失败，最后一个错误：', lastError);
+                throw new Error('Edge 代理全部不可用，请在音频设置里点「检测代理」后重试');
+            });
+        });
     }
 
     function hexToBlob(hex, mime) {
@@ -700,7 +829,8 @@
         }).catch(function (error) {
             if (seq !== audioRequestSeq) return;
             stopCurrentAudio();
-            toast('语音生成失败：' + (error && error.message || error) + '（可重试）', true);
+            const detail = String((error && error.message) || error || '未知错误');
+            toast('语音生成失败：' + (isFetchBlocked(error) ? '网络请求被拦截（CORS 或网络不通），请检查网络或代理设置' : detail) + '（可重试）', true);
         });
     }
 
@@ -1755,7 +1885,7 @@
             + '.eca-audio-row input,.eca-audio-row select{flex:1 1 180px;min-width:0;padding:5px 7px;border:1px solid #b8a584;border-radius:5px;background:#fffdf8;color:#2b1f13;box-sizing:border-box;} '
             + '.eca-audio-row input[type=checkbox]{flex:0 0 auto;min-width:auto;} .eca-audio-tip{font-size:12px;color:#7d6b56;line-height:1.5;margin:6px 0;} '
             + '.eca-audio-footer{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);} '
-            + '.eca-audio-footer button,.eca-cache-action{padding:5px 12px;border:1px solid #b8a584;border-radius:5px;background:#fcf8f0;color:#493725;cursor:pointer;} .eca-audio-footer .primary{background:#ebe0c8;border-color:#c3984d;font-weight:600;} '
+            + '.eca-audio-footer button,.eca-audio-row button,.eca-cache-action{padding:5px 12px;border:1px solid #b8a584;border-radius:5px;background:#fcf8f0;color:#493725;cursor:pointer;} .eca-audio-row button:disabled{opacity:.6;cursor:default;} .eca-audio-footer .primary{background:#ebe0c8;border-color:#c3984d;font-weight:600;} '
             + '.eca-cache-list{display:flex;flex-direction:column;gap:6px;} .eca-cache-item{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ded2bd;border-radius:6px;background:#fffdf8;} .eca-cache-meta{flex:1;min-width:0;} .eca-cache-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2b1f13;} .eca-cache-sub{font-size:11px;color:#7d6b56;margin-top:3px;} .eca-cache-item button{flex:0 0 auto;} '
             + '@media(max-width:640px){#eca-audio-settings,#eca-voice-settings,#eca-cache-panel{padding:3vh 0;} .eca-audio-modal{width:96vw!important;max-height:calc(100dvh - 6vh)!important;}}';
         doc.head.appendChild(style);
@@ -1805,14 +1935,30 @@
         });
     }
 
+    function edgePingSummary() {
+        if (String(ttsConfig.edge.proxyUrl || '').trim()) return '固定使用自定义代理，未启用自动选择';
+        if (!edgeServers.length) return '尚未检测（首次合成时会自动检测）';
+        const top = edgeServers.slice(0, 3).map(function (s) { return s.name + ' ' + Math.round(s.latency) + 'ms'; }).join('、');
+        return '可用 ' + edgeServers.length + '/' + EDGE_PROXY_SERVERS.length + '：' + top + (edgeServers.length > 3 ? ' 等' : '');
+    }
+
     function openTtsSettings() {
         const c = ttsConfig;
-        const body = '<div class="eca-audio-tip">凭据独立保存在情绪头像的 localStorage 中，不读取 st-immersive-sound。Edge 默认代理为 HTTPS 地址；文本会发送到你配置的代理服务。</div>'
-            + '<div class="eca-audio-section"><h4>Edge</h4><div class="eca-audio-row"><label>HTTPS 代理</label><input id="eca-edge-proxy" value="' + escapeHtml(c.edge.proxyUrl) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-edge-persist"' + (c.edge.persist ? ' checked' : '') + '><span>默认关闭（仅内存缓存）</span></div></div>'
+        const body = '<div class="eca-audio-tip">凭据独立保存在情绪头像的 localStorage 中，不读取 st-immersive-sound。文本会发送到你配置的代理服务。</div>'
+            + '<div class="eca-audio-section"><h4>Edge</h4><div class="eca-audio-tip">代理留空则由脚本自动探活择优、失败自动轮换；填入地址后固定只用该地址。</div><div class="eca-audio-row"><label>自定义代理</label><input id="eca-edge-proxy" value="' + escapeHtml(c.edge.proxyUrl) + '" placeholder="留空 = 自动选择可用代理"></div><div class="eca-audio-row"><label>代理状态</label><span class="eca-audio-tip" id="eca-edge-ping-status">' + escapeHtml(edgePingSummary()) + '</span><button type="button" id="eca-edge-ping">检测代理</button></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-edge-persist"' + (c.edge.persist ? ' checked' : '') + '><span>默认关闭（仅内存缓存）</span></div></div>'
             + '<div class="eca-audio-section"><h4>MiniMax</h4><div class="eca-audio-row"><label>API Key</label><input type="password" id="eca-mm-key" value="' + escapeHtml(c.minimax.apiKey) + '"></div><div class="eca-audio-row"><label>平台</label><select id="eca-mm-platform"><option value="cn"' + (c.minimax.platform === 'cn' ? ' selected' : '') + '>国内</option><option value="io"' + (c.minimax.platform === 'io' ? ' selected' : '') + '>国际</option></select></div><div class="eca-audio-row"><label>模型</label><input id="eca-mm-model" value="' + escapeHtml(c.minimax.model) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-mm-persist"' + (c.minimax.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
             + '<div class="eca-audio-section"><h4>豆包</h4><div class="eca-audio-row"><label>App ID</label><input id="eca-db-app" value="' + escapeHtml(c.doubao.appId) + '"></div><div class="eca-audio-row"><label>Access Key</label><input type="password" id="eca-db-key" value="' + escapeHtml(c.doubao.accessKey) + '"></div><div class="eca-audio-row"><label>UID</label><input id="eca-db-uid" value="' + escapeHtml(c.doubao.uid) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-db-persist"' + (c.doubao.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
             + '<div class="eca-audio-section"><h4>缓存清理</h4><div class="eca-audio-row"><label>保留天数</label><input type="number" id="eca-cache-days" min="1" value="' + c.cacheDays + '"><label>最大条数</label><input type="number" id="eca-cache-count" min="1" value="' + c.cacheMaxEntries + '"><label>最大 MB</label><input type="number" id="eca-cache-mb" min="1" value="' + c.cacheMaxMb + '"></div></div>';
         const root = audioModal('eca-audio-settings', '音频设置', body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-tts-save">保存</button>');
+        const pingBtn = root.querySelector('#eca-edge-ping');
+        pingBtn.addEventListener('click', function () {
+            const status = root.querySelector('#eca-edge-ping-status');
+            pingBtn.disabled = true; status.textContent = '检测中…';
+            pingEdgeServers(true).then(function (servers) {
+                pingBtn.disabled = false; status.textContent = edgePingSummary();
+                toast(servers.length ? '检测完成：' + servers.length + ' 个代理可用' : '所有代理都不可用', !servers.length);
+            });
+        });
         root.querySelector('#eca-tts-save').addEventListener('click', function () {
             c.edge.proxyUrl = root.querySelector('#eca-edge-proxy').value.trim(); c.edge.persist = root.querySelector('#eca-edge-persist').checked;
             c.minimax.apiKey = root.querySelector('#eca-mm-key').value.trim(); c.minimax.platform = root.querySelector('#eca-mm-platform').value; c.minimax.model = root.querySelector('#eca-mm-model').value.trim(); c.minimax.persist = root.querySelector('#eca-mm-persist').checked;
@@ -2976,6 +3122,8 @@
         getAvatarSpeech: getAvatarSpeech,
         refreshAudioButtons: refreshAudioButtons,
         getTtsCache: ttsGetAll,
+        pingEdgeServers: function (force) { return pingEdgeServers(!!force); },
+        getEdgeServers: function () { return edgeServers.map(function (s) { return { name: s.name, url: s.url, latency: s.latency }; }); },
         clearTtsCache: function () { ttsMemoryCache.clear(); return ttsClear(); },
         clearTtsMemory: function () { ttsMemoryCache.clear(); },
         scanAll: scanAll,
