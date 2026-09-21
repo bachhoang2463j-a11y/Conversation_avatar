@@ -65,7 +65,7 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
   - **Edge**（免费，默认引擎）：情绪映射到该音色支持的 `style`；无法表达的（如自定义情绪）回落到 `general`。文本经第三方公开代理合成；「音频设置」里代理**留空**即由脚本自动探活择优、失败自动轮换，**填入地址**则固定只用该地址。
   - **MiniMax**：固定情绪映射到官方枚举（微笑→happy、愤怒→angry、悲伤→sad、惊讶→surprised、轻蔑→disgusted、思考→calm、大笑→happy、杀意→angry）；无法映射的情绪不发送情绪参数，由模型按文本自然处理。
   - **豆包**：情绪（含自定义情绪）作为独立语音指令放在 `additions.context_texts`，例如「请用“杀意”的语气朗读这段话。」——支持任意中文情绪词，且不会朗读指令本身。
-  - **MiMo（小米）**：走 OpenAI 风格 `POST /chat/completions`（鉴权头 `api-key` + `Authorization`），音频以 base64 放在 `choices[0].message.audio`；情绪作为独立 user 指令（与豆包同一条通道，支持任意中文情绪词）。音色从 9 个预置里选，也可在「语音设置」里手动填 voice 字符串。
+  - **MiMo（小米）**：走 OpenAI 风格 `POST /chat/completions`（鉴权头 `api-key` + `Authorization`），音频以 base64 放在 `choices[0].message.audio`；情绪作为独立 user 指令（与豆包同一条通道，支持任意中文情绪词）。音色从 9 个预置里选，也可在「语音设置」里手动填 voice 字符串（当前只按预置音色模型 `mimo-v2.5-tts` 接入，`voicedesign` / `voiceclone` 未支持）。
   - 失败只提示重试，不自动切换引擎或音色。
 - **持久化缓存**：Edge 默认不落盘（仅当前页面内存缓存）；MiniMax / 豆包 / MiMo 默认落盘到 IndexedDB，同引擎+同音色+同文本+同情绪再次播放直接回放，不再消耗合成额度。面板底栏「语音缓存」可查看条目、试听、下载、单条删除、清理过期与清空全部。默认保留 30 天 / 最多 200 条 / 最多 512MB，超出按最旧优先清理。
 - **开关**：面板底栏「启用语音按钮」总开关（默认开），关闭后按钮全部隐藏，音色配置与缓存不受影响。

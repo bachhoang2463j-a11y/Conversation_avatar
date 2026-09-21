@@ -1792,6 +1792,14 @@ test('M10-16 MiMo：请求体结构、鉴权头与 base64 音频解析', functio
     assert(call.body.messages[0].role === 'user' && call.body.messages[0].content.indexOf('愤怒') !== -1, '情绪应作为 user 指令：' + JSON.stringify(call.body.messages[0]));
     assert(call.body.messages[1].role === 'assistant' && call.body.messages[1].content === 'MiMo 测试。', 'assistant 应为待合成正文：' + JSON.stringify(call.body.messages[1]));
     assert(window.__audioPlayCount === 1, '应正常播放 MiMo 返回的音频，实际播放 ' + window.__audioPlayCount + ' 次');
+    // 模型必须进缓存键：改模型后同音色同文本应重新合成而不是回放旧模型的音频
+    // 注意 setTtsConfig 是从默认值重建整份配置，只传 model 会把 apiKey 一起清空
+    window.__lastAudio.onended();
+    window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts-voicedesign', format: 'wav' } });
+    __buttons(mes)[0].click();
+    return __wait(180).then(function () {
+      assert(__countTtsCalls('mimo') === 2, '改模型后应重新合成，实际只请求 ' + __countTtsCalls('mimo') + ' 次（模型未进缓存键）');
+    });
   });
 });
 
