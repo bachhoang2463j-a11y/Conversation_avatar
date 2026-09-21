@@ -965,12 +965,12 @@
     function resetAudioButton(button) {
         if (!button) return;
         button.classList.remove('eca-audio-loading', 'eca-audio-playing');
-        button.textContent = '🔊';
+        if (button.tagName === 'BUTTON') button.textContent = '🔊';
     }
 
-    /** 每次重扫都会把按钮整批重建，播放结束必须复位文档里所有按钮；只复位点击时那个节点会漏掉重建后的新节点 */
+    /** 每次重扫都会恢复状态，播放结束必须复位文档里所有头像与兼容按钮 */
     function resetAllAudioButtons() {
-        doc.querySelectorAll('.eca-audio-btn').forEach(resetAudioButton);
+        doc.querySelectorAll('.eca-avatar.eca-audio-loading, .eca-avatar.eca-audio-playing, .eca-audio-btn').forEach(resetAudioButton);
     }
 
     function stopCurrentAudio() {
@@ -988,21 +988,22 @@
         currentAudioState = null;
     }
 
-    /** 视听状态按「角色 + 文本」记录：重扫重建按钮后据此恢复播放/合成态 */
-    function applyAudioStateToButton(button, speech) {
+    /** 视听状态按「角色 + 文本」记录：重扫恢复头像的播放/合成态 */
+    function applyAudioStateToAvatar(avatar, speech) {
         if (!currentAudioState) return;
         if (currentAudioState.name !== speech.name || currentAudioState.text !== speech.text) return;
-        button.classList.add(currentAudioState.phase === 'playing' ? 'eca-audio-playing' : 'eca-audio-loading');
-        button.textContent = currentAudioState.phase === 'playing' ? '■' : '…';
+        avatar.classList.add(currentAudioState.phase === 'playing' ? 'eca-audio-playing' : 'eca-audio-loading');
     }
 
     function playAvatarSpeech(button, avatar) {
-        if (currentAudioButton === button && (currentAudio || button.classList.contains('eca-audio-loading'))) {
+        const targetAvatar = avatar || button;
+        if (!targetAvatar) return;
+        if (currentAudioButton === targetAvatar && (currentAudio || targetAvatar.classList.contains('eca-audio-loading'))) {
             stopCurrentAudio();
             return;
         }
         stopCurrentAudio();
-        const speech = getAvatarSpeech(avatar);
+        const speech = getAvatarSpeech(targetAvatar);
         if (!speech) return;
         const voice = getVoiceConfig(speech.name);
         if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
@@ -1011,7 +1012,8 @@
         const request = Object.assign({ engine: voice.engine, voiceId: voice.voiceId, resourceId: voice.resourceId || '', text: speech.text, emotion: speech.emotion, platform: voice.engine === 'minimax' ? ttsConfig.minimax.platform : '', model: voice.engine === 'minimax' ? ttsConfig.minimax.model : (voice.engine === 'mimo' ? ttsConfig.mimo.model : '') }, emotionRequest);
         // 把生效的语速/音调/音量固化进 request：既供合成使用，也进缓存键，避免改了参数还回放旧音频
         if (voice.engine === 'edge') Object.assign(request, edgeSpeechParams(voice));
-        button.classList.add('eca-audio-loading'); button.textContent = '…'; currentAudioButton = button;
+        targetAvatar.classList.add('eca-audio-loading');
+        currentAudioButton = targetAvatar;
         currentAudioState = { name: speech.name, text: speech.text, phase: 'loading' };
         const seq = ++audioRequestSeq;
         getOrCreateAudio(speech.text, request).then(function (result) {
@@ -1021,7 +1023,10 @@
             currentAudio = audio; currentAudioUrl = url;
             currentAudioState = { name: speech.name, text: speech.text, phase: 'playing' };
             audio.src = url; audio.preload = 'auto';
-            if (currentAudioButton) { currentAudioButton.classList.remove('eca-audio-loading'); currentAudioButton.classList.add('eca-audio-playing'); currentAudioButton.textContent = '■'; }
+            if (currentAudioButton) {
+                currentAudioButton.classList.remove('eca-audio-loading');
+                currentAudioButton.classList.add('eca-audio-playing');
+            }
             audio.onended = function () { if (currentAudio === audio) stopCurrentAudio(); };
             audio.onerror = function () { if (currentAudio === audio) { stopCurrentAudio(); toast('音频播放失败，请重试', true); } };
             const playResult = audio.play();
@@ -1034,48 +1039,47 @@
         });
     }
 
-    function positionAudioButton(button, avatar, container) {
-        const ar = avatar.getBoundingClientRect();
-        const rr = container.getBoundingClientRect();
-        button.style.left = (ar.left - rr.left + ar.width - 2) + 'px';
-        button.style.top = (ar.top - rr.top + 2) + 'px';
+    function positionAudioButton() {
+        // 兼容保留
     }
 
     function syncAudioButtons(root) {
         const scope = root || doc;
         const old = scope.querySelector('.eca-audio-overlay');
         if (old) old.remove();
-        if (!settings.ttsEnabled) return;
-        const mes = scope.closest && scope.closest('.mes');
-        if (!mes || mes.classList.contains('is_user')) return;
         const avatars = Array.prototype.slice.call(scope.querySelectorAll('.eca-avatar:not(.eca-placeholder)'));
         if (!avatars.length) return;
-        const overlay = doc.createElement('div');
-        overlay.className = 'eca-audio-overlay';
-        const positionParent = scope;
-        if (topWindow.getComputedStyle(positionParent).position === 'static') positionParent.style.position = 'relative';
-        let buttonCount = 0;
-        avatars.forEach(function (avatar, index) {
+        const mes = scope.closest && scope.closest('.mes');
+        const isAiFloor = mes ? !mes.classList.contains('is_user') : true;
+
+        avatars.forEach(function (avatar) {
+            if (!settings.ttsEnabled || !isAiFloor) {
+                avatar.classList.remove('eca-has-speech', 'eca-audio-loading', 'eca-audio-playing');
+                if (avatar.dataset.ecaAudioBound) {
+                    delete avatar.dataset.ecaAudioBound;
+                }
+                return;
+            }
             const speech = getAvatarSpeech(avatar);
-            if (!speech) return;
-            const button = doc.createElement('button');
-            button.type = 'button'; button.className = 'eca-audio-btn'; button.textContent = '🔊';
-            button.title = '播放「' + speech.name + '」对白'; button.setAttribute('aria-label', button.title);
-            button.dataset.ecaAudioName = speech.name;
-            button.dataset.ecaAudioIndex = String(index);
-            // 头像元素可能在流式期间被整体替换，点击时按序号取当前文档里的活元素
-            button.addEventListener('click', function (event) {
-                event.preventDefault(); event.stopPropagation();
-                const list = positionParent.querySelectorAll('.eca-avatar:not(.eca-placeholder)');
-                const live = list[Number(button.dataset.ecaAudioIndex)] || avatar;
-                playAvatarSpeech(button, live);
-            });
-            applyAudioStateToButton(button, speech);
-            overlay.appendChild(button);
-            positionAudioButton(button, avatar, positionParent);
-            buttonCount++;
+            if (!speech) {
+                avatar.classList.remove('eca-has-speech', 'eca-audio-loading', 'eca-audio-playing');
+                return;
+            }
+            avatar.classList.add('eca-has-speech');
+            avatar.title = '点击播放「' + speech.name + '」对白';
+            avatar.setAttribute('aria-label', avatar.title);
+            applyAudioStateToAvatar(avatar, speech);
+
+            if (!avatar.dataset.ecaAudioBound) {
+                avatar.dataset.ecaAudioBound = '1';
+                avatar.addEventListener('click', function (event) {
+                    if (!settings.ttsEnabled) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    playAvatarSpeech(avatar);
+                });
+            }
         });
-        if (buttonCount) positionParent.appendChild(overlay);
     }
 
     function refreshAudioButtons() {
@@ -1085,13 +1089,20 @@
     const CSS_TEXT = ''
         + '.eca-avatar{display:inline-block;height:var(--eca-size,2.5em);width:auto;'
         + 'max-width:calc(var(--eca-size,2.5em)*1.6);object-fit:cover;vertical-align:text-bottom;'
-        + 'margin:0 .18em;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.22);}'
-        + '.eca-audio-overlay{position:absolute;inset:0;z-index:6;pointer-events:none;}'
-        + '.eca-audio-btn{position:absolute;pointer-events:auto;width:24px;height:24px;padding:0;border:1px solid rgba(255,255,255,.8);border-radius:50%;background:rgba(45,34,24,.82);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font:14px/1 system-ui,sans-serif;box-shadow:0 1px 5px rgba(0,0,0,.35);transform:translate(25%,-25%);}'
-        + '.eca-audio-btn:hover{background:#9c7138;}'
-        + '.eca-audio-btn.eca-audio-loading{animation:eca-audio-pulse 1s linear infinite;}'
-        + '.eca-audio-btn.eca-audio-playing{background:#943325;}'
-        + '@keyframes eca-audio-pulse{50%{opacity:.45;}}'
+        + 'margin:0 .18em;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.22);'
+        + 'transition:box-shadow .2s ease,transform .15s ease;}'
+        + '.eca-avatar.eca-has-speech{cursor:pointer;}'
+        + '.eca-avatar.eca-has-speech:hover{box-shadow:0 2px 8px rgba(195,152,77,.35),0 0 0 1px rgba(195,152,77,.55);transform:translateY(-1px);}'
+        // 加载态：头像周围暖金微光呼吸闪烁
+        + '.eca-avatar.eca-audio-loading{animation:eca-avatar-glow 1.2s ease-in-out infinite alternate;}'
+        + '@keyframes eca-avatar-glow{0%{box-shadow:0 0 4px rgba(195,152,77,.4),0 0 0 1px rgba(195,152,77,.45);}100%{box-shadow:0 0 14px rgba(195,152,77,.85),0 0 4px rgba(255,235,175,.9),0 0 0 2px rgba(195,152,77,.7);}}'
+        // 播放态：头像周围典雅暖金色双重涟漪波纹扩散
+        + '.eca-avatar.eca-audio-playing{animation:eca-avatar-ripple 1.8s cubic-bezier(.25,.46,.45,.94) infinite;}'
+        + '@keyframes eca-avatar-ripple{'
+        + '0%{box-shadow:0 0 0 0 rgba(195,152,77,.75),0 0 0 0 rgba(195,152,77,.45),0 1px 4px rgba(0,0,0,.15);}'
+        + '40%{box-shadow:0 0 0 6px rgba(195,152,77,.5),0 0 0 2px rgba(195,152,77,.35),0 1px 4px rgba(0,0,0,.15);}'
+        + '70%{box-shadow:0 0 0 13px rgba(195,152,77,0),0 0 0 7px rgba(195,152,77,.25),0 1px 4px rgba(0,0,0,.15);}'
+        + '100%{box-shadow:0 0 0 14px rgba(195,152,77,0),0 0 0 14px rgba(195,152,77,0),0 1px 4px rgba(0,0,0,.15);}}'
         // 占位符不可在自身上改 font-size：height 的 em 会按放大后的字号解析，导致尺寸超标
         + '.eca-avatar.eca-placeholder{width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);'
         + 'max-width:none;box-sizing:border-box;display:inline-flex;align-items:center;'
@@ -1941,9 +1952,10 @@
         + '#eca-panel .eca-char-del{background:none;border:0;color:#9d8c78;cursor:pointer;font-size:11px;padding:1px 3px;border-radius:3px;opacity:.6;transition:all .12s ease;}'
         + '#eca-panel .eca-char-del:hover{color:#943325;background:rgba(148,51,37,.12);opacity:1;}'
         // 底栏双区布局与分割线
-        + '#eca-panel .eca-footer-left{display:flex;align-items:center;gap:8px;flex:0 0 auto;}'
+        + '#eca-panel .eca-footer-left{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:nowrap;}'
+        + '#eca-panel .eca-footer-tools{display:flex;align-items:center;gap:8px;flex:0 0 auto;}'
         + '#eca-panel .eca-footer-divider{width:1px;height:18px;background:#ded2bd;flex:0 0 auto;margin:0 2px;}'
-        + '#eca-panel .eca-footer-right{display:flex;align-items:center;gap:12px;flex:1 1 auto;justify-content:flex-end;white-space:nowrap;flex-wrap:wrap;}'
+        + '#eca-panel .eca-footer-right{display:flex;align-items:center;gap:12px;flex:1 1 auto;justify-content:flex-end;white-space:nowrap;flex-wrap:nowrap;}'
         + '#eca-panel .eca-add{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;text-shadow:0 1px 0 rgba(255,255,255,.7);user-select:none;white-space:nowrap;}'
         + '#eca-panel .eca-add.eca-add-char{background:linear-gradient(180deg,#fefaf0 0%,#ebe0c8 100%);border:1px solid #c3984d;color:#2b1f13;box-shadow:0 1px 3px rgba(110,75,30,.15),inset 0 1px 0 #fff;}'
         + '#eca-panel .eca-add.eca-add-char:hover{background:linear-gradient(180deg,#fffdf8 0%,#f4e8d0 100%);border-color:#9c7138;transform:translateY(-1px);box-shadow:0 2px 6px rgba(156,113,56,.25);}'
@@ -2045,7 +2057,7 @@
         + '#eca-panel .eca-cell-name{font-size:11px;}'
         + '#eca-panel .eca-footer{flex-wrap:wrap;gap:8px;padding:8px 12px;min-height:auto;}'
         + '#eca-panel .eca-footer-divider{display:none;}'
-        + '#eca-panel .eca-footer-left,#eca-panel .eca-footer-right{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:8px;}'
+        + '#eca-panel .eca-footer-left,#eca-panel .eca-footer-right,#eca-panel .eca-footer-tools{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:8px;}'
         + '#eca-panel .eca-size input[type=range]{width:80px;}'
         + '}'
         // 排障诊断弹窗（复用羊皮纸骨架）
@@ -2543,19 +2555,21 @@
             + '    <div class="eca-footer-left">'
             + '      <button class="eca-add eca-add-char" id="eca-add-char">＋ 新增角色</button>'
             + '      <button class="eca-add eca-add-group" id="eca-add-group">＋ 新增分组</button>'
+            + '      <div class="eca-footer-divider"></div>'
+            + '      <div class="eca-footer-tools">'
+            + '        <button class="eca-add eca-add-group" id="eca-tts-settings-btn" title="配置三种语音引擎">音频设置</button>'
+            + '        <button class="eca-add eca-add-group" id="eca-cache-btn" title="管理持久化语音">语音缓存</button>'
+            + '        <button class="eca-add eca-add-char" id="eca-diag-btn" title="生成无控制台排障报告">⚙ 排障</button>'
+            + '      </div>'
             + '    </div>'
-            + '    <div class="eca-footer-divider"></div>'
             + '    <div class="eca-footer-right eca-footer-actions">'
             + '      <label class="eca-switch" title="开启后将头像标记规则注入酒馆上下文"><input type="checkbox" id="eca-enabled"> 启用提示词注入</label>'
-            + '      <label class="eca-switch" title="显示或隐藏 AI 楼层头像上的独立语音按钮"><input type="checkbox" id="eca-tts-enabled"> 启用语音按钮</label>'
+            + '      <label class="eca-switch" title="开启后点击 AI 楼层头像可播放语音"><input type="checkbox" id="eca-tts-enabled"> 启用语音播放</label>'
             + '      <div class="eca-size"><span>头像大小</span>'
             + '        <input type="range" id="eca-size-range" min="1.5" max="5" step="0.1">'
             + '        <span class="eca-size-val" id="eca-size-val"></span></div>'
             + '      <label class="eca-switch" title="输出完成后统一替换头像，流式闪烁时使用"><input type="checkbox" id="eca-delay-render"> 延时渲染</label>'
             + '      <label class="eca-switch" title="勾选切为顶端首行平齐，不勾选为垂直居中"><input type="checkbox" id="eca-top-align"> 置顶</label>'
-            + '      <button class="eca-add eca-add-group" id="eca-tts-settings-btn" title="配置三种语音引擎">音频设置</button>'
-            + '      <button class="eca-add eca-add-group" id="eca-cache-btn" title="管理持久化语音">语音缓存</button>'
-            + '      <button class="eca-add eca-add-char" id="eca-diag-btn" title="生成无控制台排障报告">⚙ 排障</button>'
             + '    </div>'
             + '  </div>'
             + '</div>';

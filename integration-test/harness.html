@@ -1454,7 +1454,7 @@ function __ttsReset() {
   window.EmoAvatar.setTtsEnabled(true);
   window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: '' } });
 }
-function __buttons(mes) { return mes.querySelectorAll('.eca-audio-btn'); }
+function __buttons(mes) { return mes.querySelectorAll('.eca-avatar.eca-has-speech'); }
 test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', function () {
   var api = window.EmoAvatar;
   ['setTtsEnabled', 'getTtsConfig', 'setTtsConfig', 'getVoiceConfig', 'setVoiceConfig',
@@ -1497,7 +1497,7 @@ test('M10-2 按钮只出现在 AI 楼层的真实头像且该段有完整引号'
   assert(__buttons(noQuote).length === 0, '无引号的楼层不应有按钮');
   assert(__buttons(userFloor).length === 0, '用户楼层不应有按钮');
   assert(__buttons(placeholder).length === 0, '占位头像不应有按钮');
-  assert(withQuote.querySelector('.eca-audio-btn').title.indexOf('弗兰克') !== -1, '按钮提示应包含角色名');
+  assert(withQuote.querySelector('.eca-avatar.eca-has-speech').title.indexOf('弗兰克') !== -1, '头像提示应包含角色名');
 });
 test('M10-3 同段嵌套头像各自取自己的台词', function () {
   __resetChat(); __seedM1(); __ttsReset();
@@ -1610,9 +1610,9 @@ test('M10-8 Edge 不落盘；总开关关闭后按钮消失、开启后恢复', 
   }).then(function (records) {
     assert(records.filter(function (r) { return r.engine === 'edge'; }).length === 0, 'Edge 默认不应写入持久缓存');
     window.EmoAvatar.setTtsEnabled(false);
-    assert(document.querySelectorAll('.eca-audio-btn').length === 0, '关闭后按钮应消失');
+    assert(document.querySelectorAll('.eca-avatar.eca-has-speech').length === 0, '关闭后头像语音属性应移除');
     window.EmoAvatar.setTtsEnabled(true);
-    assert(document.querySelectorAll('.eca-audio-btn').length >= 1, '开启后按钮应恢复');
+    assert(document.querySelectorAll('.eca-avatar.eca-has-speech').length >= 1, '开启后头像语音属性应恢复');
   });
 });
 test('M10-9 合成失败只提示重试、不切换引擎', function () {
@@ -1760,15 +1760,12 @@ test('M10-15 播放结束后按钮回到待播放态（期间按钮被重扫重�
   assert(!!btn, '应渲染语音按钮');
   btn.click();
   return __wait(150).then(function () {
-    assert(btn.classList.contains('eca-audio-playing') && btn.textContent === '■', '合成后应进入播放态，实际 ' + btn.className + ' / ' + btn.textContent);
-    // 播放期间聊天区任何 DOM 变化都会触发重扫，按钮被整批重建
+    assert(btn.classList.contains('eca-audio-playing'), '合成后应进入播放态，实际 ' + btn.className);
     window.EmoAvatar.refreshAudioButtons();
     var live = __buttons(mes)[0];
-    assert(live && live !== btn, '重扫后按钮应是新节点');
-    assert(live.classList.contains('eca-audio-playing'), '新按钮应沿用播放态');
+    assert(live.classList.contains('eca-audio-playing'), '头像应沿用播放态');
     window.__lastAudio.onended();
-    assert(!live.classList.contains('eca-audio-playing') && !live.classList.contains('eca-audio-loading'), '播放结束后可见按钮应退出播放态，实际 ' + live.className);
-    assert(live.textContent === '🔊', '播放结束后应回到待播放图标，实际 ' + live.textContent);
+    assert(!live.classList.contains('eca-audio-playing') && !live.classList.contains('eca-audio-loading'), '播放结束后头像应退出播放态，实际 ' + live.className);
   });
 });
 
