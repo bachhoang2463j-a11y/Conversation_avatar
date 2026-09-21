@@ -311,7 +311,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.5.2', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.6.0', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1503,6 +1503,9 @@ function __ttsReset() {
   window.__failStatus = 500;
   window.__confirmMessages = [];
   window.EmoAvatar.setTtsEnabled(true);
+  // 播放队列会跨用例残留（假 Audio 不会自己播完），关一次语音总开关即全停清队
+  window.EmoAvatar.setTtsEnabled(false);
+  window.EmoAvatar.setTtsEnabled(true);
   window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: '' } });
 }
 function __buttons(mes) { return mes.querySelectorAll('.eca-avatar.eca-has-speech'); }
@@ -1524,6 +1527,12 @@ function __tap(el) {
   __pointer(el, 'pointerdown');
   __pointer(el, 'pointerup');
   el.click();
+}
+/* 双击：两次真实点击 + dblclick（浏览器就是 click、click、dblclick 这个顺序） */
+function __doubleTap(el) {
+  __tap(el);
+  __tap(el);
+  el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
 }
 function __toasts() {
   return Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
@@ -2422,7 +2431,301 @@ test('M10-32 合成不走 window.fetch（防第三方 fetch 缓存补丁截获�
   });
 });
 
-/* ---------- 操作按钮 ---------- */
+test('M10-33 播放队列：点别的头像不打断当前播放，前一段播完自动接播', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mesA = __addFloor('<p>{弗兰克(微笑)}“队列第一段。”</p>', false);
+  var mesB = __addFloor('<p>{弗兰克(愤怒)}“队列第二段。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btnA = __buttons(mesA)[0];
+  var btnB = __buttons(mesB)[0];
+  var audioA = null;
+  __tap(btnA);
+  return __wait(180).then(function () {
+    audioA = window.__lastAudio;
+    assert(window.__audioPlayCount === 1 && btnA.classList.contains('eca-audio-playing'), '第一段应已开始播放：' + btnA.className);
+    __tap(btnB);                          // 播放中点第二个头像
+    assert(audioA.paused === false, '点第二个头像不应打断正在播放的第一段');
+    assert(btnA.classList.contains('eca-audio-playing'), '第一段应保持播放态：' + btnA.className);
+    return __wait(200);
+  }).then(function () {
+    assert(btnB.classList.contains('eca-audio-loading'), '第二段应先进加载态等播：' + btnB.className);
+    assert(window.__audioPlayCount === 1, '第一段没播完时第二段不该抢播，实际 ' + window.__audioPlayCount + ' 次');
+    audioA.onended();                     // 第一段自然播完
+    return __wait(60);
+  }).then(function () {
+    assert(window.__audioPlayCount === 2, '第一段播完应自动接播第二段，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnB.classList.contains('eca-audio-playing'), '第二段应进入播放态：' + btnB.className);
+    assert(!btnA.classList.contains('eca-audio-playing') && !btnA.classList.contains('eca-audio-loading'), '第一段应复位：' + btnA.className);
+  });
+});
+
+test('M10-34 队列按顺序接播；点正在播放的头像 = 停止并立刻接播下一条', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mesA = __addFloor('<p>{弗兰克(微笑)}“顺序甲。”</p>', false);
+  var mesB = __addFloor('<p>{弗兰克(愤怒)}“顺序乙。”</p>', false);
+  var mesC = __addFloor('<p>{弗兰克(悲伤)}“顺序丙。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btnA = __buttons(mesA)[0];
+  var btnB = __buttons(mesB)[0];
+  var btnC = __buttons(mesC)[0];
+  __tap(btnA); __tap(btnB); __tap(btnC);
+  return __wait(320).then(function () {
+    assert(window.__audioPlayCount === 1, '同一时刻只该队首出声，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnB.classList.contains('eca-audio-loading') && btnC.classList.contains('eca-audio-loading'), '乙丙都应在排队：' + btnB.className + ' / ' + btnC.className);
+    __tap(btnA);                          // 点正在播放的头像 = 停止
+    return __wait(60);
+  }).then(function () {
+    assert(window.__audioPlayCount === 2, '停止队首后应立刻接播下一条，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnB.classList.contains('eca-audio-playing'), '乙应接播：' + btnB.className);
+    assert(btnC.classList.contains('eca-audio-loading'), '丙应继续排队：' + btnC.className);
+    window.__lastAudio.onended();
+    return __wait(60);
+  }).then(function () {
+    assert(window.__audioPlayCount === 3, '乙播完应接播丙，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnC.classList.contains('eca-audio-playing'), '丙应进入播放态：' + btnC.className);
+    window.__lastAudio.onended();         // 队列排空
+    return __wait(40);
+  }).then(function () {
+    __tap(btnA);
+    return __wait(180);
+  }).then(function () {
+    assert(window.__audioPlayCount === 4, '队列空后点击应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnA.classList.contains('eca-audio-playing'), '甲应重新播起来：' + btnA.className);
+  });
+});
+
+test('M10-35 再点已排队的头像 = 取消该条，不影响正在播放的那一段', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mesA = __addFloor('<p>{弗兰克(微笑)}“在播甲。”</p>', false);
+  var mesB = __addFloor('<p>{弗兰克(愤怒)}“排队乙。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btnA = __buttons(mesA)[0];
+  var btnB = __buttons(mesB)[0];
+  var audioA = null;
+  __tap(btnA);
+  return __wait(180).then(function () {
+    audioA = window.__lastAudio;
+    __tap(btnB);
+    return __wait(180);
+  }).then(function () {
+    assert(btnB.classList.contains('eca-audio-loading'), '乙应在排队：' + btnB.className);
+    __tap(btnB);                          // 再点 = 取消这一条
+    assert(!btnB.classList.contains('eca-audio-loading') && !btnB.classList.contains('eca-audio-playing'), '取消后乙应立即复位：' + btnB.className);
+    assert(audioA.paused === false, '取消排队的乙不应影响正在播的甲');
+    assert(btnA.classList.contains('eca-audio-playing'), '甲应继续播：' + btnA.className);
+    audioA.onended();
+    return __wait(80);
+  }).then(function () {
+    assert(window.__audioPlayCount === 1, '乙被取消后不该接播，实际 ' + window.__audioPlayCount + ' 次');
+    assert(!btnB.classList.contains('eca-audio-loading') && !btnB.classList.contains('eca-audio-playing'), '乙不该残留状态：' + btnB.className);
+  });
+});
+
+test('M10-36 播放队列上限：超出即拒绝入队并提示', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var floors = [];
+  for (var i = 1; i <= 6; i++) floors.push(__addFloor('<p>{弗兰克(微笑)}“队列上限第' + i + '段。”</p>', false));
+  window.EmoAvatar.scanAll();
+  floors.forEach(function (mes) { __tap(__buttons(mes)[0]); });
+  return __wait(360).then(function () {
+    var sixth = __buttons(floors[5])[0];
+    assert(!sixth.classList.contains('eca-audio-loading') && !sixth.classList.contains('eca-audio-playing'), '第 6 条不该入队（上限 5）：' + sixth.className);
+    assert(__toasts().indexOf('播放队列已满') !== -1, '超出上限应提示：' + __toasts());
+    assert(__countTtsCalls('edge') === 5, '第 6 条不该发起合成，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(document.querySelectorAll('.eca-avatar.eca-audio-playing').length === 1, '同时只该有 1 个头像在播');
+  });
+});
+
+test('M10-37 第二音色：单击用第一音色，双击改用第二音色（各自独立请求）', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false }, doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', alt: { engine: 'doubao', voiceId: 'zh_male_dayi_saturn_bigtts' } });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“双音色用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  assert(btn.title.indexOf('双击用第二音色') !== -1, '配了第二音色的头像提示应含双击说明：' + btn.title);
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btn);
+    return __wait(180);
+  }).then(function () {
+    var call = __lastTtsCall('edge');
+    assert(call && call.url.indexOf('v=zh-CN-XiaoxiaoNeural') !== -1, '单击应走第一音色：' + (call && call.url));
+    assert(__countTtsCalls('doubao') === 0, '单击不该发第二音色的请求，实际 ' + __countTtsCalls('doubao'));
+    assert(window.__audioPlayCount === 1, '第一音色应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    window.__lastAudio.onended();
+    return __wait(400);
+  }).then(function () {
+    __clearToasts();
+    __doubleTap(btn);                     // 双击 = 第二音色
+    return __wait(260);
+  }).then(function () {
+    var call = __lastTtsCall('doubao');
+    assert(call, '双击应改用第二音色（豆包）');
+    assert(call.body.req_params.speaker === 'zh_male_dayi_saturn_bigtts', '第二音色 speaker 不符：' + JSON.stringify(call.body.req_params));
+    assert(call.headers['X-Api-Resource-Id'] === 'seed-tts-2.0', '第二音色 Resource ID 应回落到内置值：' + call.headers['X-Api-Resource-Id']);
+    assert(__countTtsCalls('edge') === 1, '双击不该再用第一音色发请求，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 2, '第二音色应接着播，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-playing'), '应处于播放态：' + btn.className);
+  });
+});
+
+test('M10-38 未配第二音色：双击不发第二音色请求、无提示，行为与点两次完全一致', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false }, doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“无第二音色用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  assert(btn.title.indexOf('双击') === -1, '未配第二音色的提示不该含双击说明：' + btn.title);
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __doubleTap(btn);
+    return __wait(240);
+  }).then(function () {
+    assert(__countTtsCalls('doubao') === 0, '双击不该发第二音色请求，实际 ' + __countTtsCalls('doubao'));
+    assert(__toasts().indexOf('第二音色') === -1 && __toasts().indexOf('播放队列已满') === -1, '双击不该有任何提示：' + __toasts());
+    assert(__countTtsCalls('edge') <= 1, '两次点击最多只该发起一次合成（第二下取消），实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(document.querySelectorAll('.eca-avatar.eca-audio-playing').length === 0, '第二下点击已取消，不该有头像在播');
+    __tap(btn);                           // 状态机没卡住：随后单击照常播放
+    return __wait(180);
+  }).then(function () {
+    assert(window.__audioPlayCount === 1, '双击之后单击应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-playing'), '应处于播放态：' + btn.className);
+  });
+});
+
+test('M10-39 语音设置：第二音色默认「无」、按引擎隔离、保存与清空都落到配置', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  __seedM1();
+  __ttsReset();
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  var pick = function (sel) { return panel.querySelector(sel); };
+  var shown = function (dlg, sel) {
+    var el = dlg.querySelector(sel);
+    var box = el && el.closest('[data-eca-alt-for]');
+    return !!box && box.style.display !== 'none';
+  };
+  return __wait(80).then(function () {
+    pick('#eca-char-list .eca-char-item').click();
+    pick('#eca-voice-btn').click();
+    var vdlg = document.getElementById('eca-voice-settings');
+    assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
+    var altEngine = vdlg.querySelector('#eca-alt-voice-engine');
+    assert(altEngine, '弹窗缺少第二音色引擎下拉');
+    assert(altEngine.value === '', '第二音色默认应为「无」，实际 ' + altEngine.value);
+    var noneOption = Array.prototype.filter.call(altEngine.options, function (o) { return o.value === ''; })[0];
+    assert(noneOption && noneOption.textContent.indexOf('无') !== -1, '第二音色下拉应有「无（不启用）」选项');
+    assert(!shown(vdlg, '#eca-alt-edge-voice') && !shown(vdlg, '#eca-alt-doubao-voice'), '选「无」时不该露出任何第二音色字段');
+    assert(vdlg.querySelector('#eca-edge-voice').value === 'zh-CN-YunxiNeural', '第一音色回显不该受影响，实际 ' + vdlg.querySelector('#eca-edge-voice').value);
+    // 切到豆包：只露第二音色自己的豆包字段，不串其它引擎
+    altEngine.value = 'doubao'; altEngine.dispatchEvent(new Event('change', { bubbles: true }));
+    assert(shown(vdlg, '#eca-alt-doubao-voice') && shown(vdlg, '#eca-alt-resource-id'), '第二音色切豆包应显示豆包音色与 Resource ID');
+    assert(!shown(vdlg, '#eca-alt-edge-voice') && !shown(vdlg, '#eca-alt-mimo-voice'), '第二音色不该串出其它引擎字段');
+    vdlg.querySelector('#eca-alt-doubao-voice').value = 'zh_male_dayi_saturn_bigtts';
+    vdlg.querySelector('#eca-voice-save').click();
+    var vc = window.EmoAvatar.getVoiceConfig('弗兰克');
+    assert(vc && vc.engine === 'edge' && vc.voiceId === 'zh-CN-YunxiNeural', '第一音色不该被第二音色改动：' + JSON.stringify(vc));
+    assert(vc.alt && vc.alt.engine === 'doubao' && vc.alt.voiceId === 'zh_male_dayi_saturn_bigtts', '第二音色未保存：' + JSON.stringify(vc && vc.alt));
+    assert(vc.alt.resourceId === 'seed-tts-2.0', '第二音色 Resource ID 应回落到内置值：' + JSON.stringify(vc.alt));
+    // 重新打开：第二音色应回显，选回「无」即清空
+    pick('#eca-voice-btn').click();
+    var vdlg2 = document.getElementById('eca-voice-settings');
+    var altEngine2 = vdlg2.querySelector('#eca-alt-voice-engine');
+    assert(altEngine2.value === 'doubao', '第二音色应回显引擎，实际 ' + altEngine2.value);
+    assert(vdlg2.querySelector('#eca-alt-doubao-voice').value === 'zh_male_dayi_saturn_bigtts', '第二音色应回显音色');
+    altEngine2.value = ''; altEngine2.dispatchEvent(new Event('change', { bubbles: true }));
+    vdlg2.querySelector('#eca-voice-save').click();
+    var vc2 = window.EmoAvatar.getVoiceConfig('弗兰克');
+    assert(vc2 && !vc2.alt, '选「无」后应清掉第二音色：' + JSON.stringify(vc2));
+    assert(vc2.engine === 'edge' && vc2.voiceId === 'zh-CN-YunxiNeural', '第一音色仍应保留：' + JSON.stringify(vc2));
+    vdlg2.querySelector('[data-audio-close]').click();
+    window.EmoAvatar.closePanel();
+  });
+});
+
+test('M10-40 长按别的段不打断在播语音，重生成后排到队尾接播', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mesA = __addFloor('<p>{弗兰克(微笑)}“重生成甲。”</p>', false);
+  var mesB = __addFloor('<p>{弗兰克(愤怒)}“重生成乙。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btnA = __buttons(mesA)[0];
+  var btnB = __buttons(mesB)[0];
+  var audioA = null;
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btnA);
+    return __wait(180);
+  }).then(function () {
+    audioA = window.__lastAudio;
+    assert(window.__audioPlayCount === 1, '甲应先播起来，实际 ' + window.__audioPlayCount + ' 次');
+    return __longPress(btnB, 700);        // 长按乙：强制重生成
+  }).then(function () {
+    return __wait(300);
+  }).then(function () {
+    assert(audioA.paused === false, '长按别的段不应打断正在播放的甲');
+    assert(btnA.classList.contains('eca-audio-playing'), '甲应继续播：' + btnA.className);
+    assert(__toasts().indexOf('已重新生成') !== -1, '应回报重生成结果：' + __toasts());
+    assert(__toasts().indexOf('已加入播放队列') !== -1, '排队重生成应提示已入队：' + __toasts());
+    assert(btnB.classList.contains('eca-audio-loading'), '乙应在排队等播：' + btnB.className);
+    assert(window.__audioPlayCount === 1, '甲没播完前乙不该抢播，实际 ' + window.__audioPlayCount + ' 次');
+    audioA.onended();
+    return __wait(60);
+  }).then(function () {
+    assert(window.__audioPlayCount === 2, '甲播完应接播重生成后的乙，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btnB.classList.contains('eca-audio-playing'), '乙应进入播放态：' + btnB.className);
+    __clearToasts();
+    return __longPress(btnB, 700);        // 长按正在播放的这一段：原地替换、立刻重播
+  }).then(function () {
+    return __wait(300);
+  }).then(function () {
+    assert(window.__audioPlayCount === 3, '重生成正在播放的段应立刻重播，实际 ' + window.__audioPlayCount + ' 次');
+    assert(__toasts().indexOf('已重新生成') !== -1 && __toasts().indexOf('已加入播放队列') === -1, '重生成当前段不该提示入队：' + __toasts());
+    assert(btnB.classList.contains('eca-audio-playing'), '仍应处于播放态：' + btnB.className);
+  });
+});
+
+test('M10-41 楼层重渲染后，播放/排队状态仍按角色+文本恢复，且新元素上能取消', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var rawA = '{弗兰克(微笑)}“重渲染甲。”';
+  var rawB = '{弗兰克(愤怒)}“重渲染乙。”';
+  var mesA = __addFloor(rawA, false);
+  var mesB = __addFloor(rawB, false);
+  window.EmoAvatar.scanAll();
+  __tap(__buttons(mesA)[0]);
+  return __wait(180).then(function () {
+    __tap(__buttons(mesB)[0]);            // 甲在播，乙排队
+    return __wait(180);
+  }).then(function () {
+    // 模拟酒馆流式重渲染：整楼 DOM 被覆盖回原始文本，头像元素全新
+    mesA.querySelector('.mes_text').innerHTML = rawA;
+    mesB.querySelector('.mes_text').innerHTML = rawB;
+    window.EmoAvatar.scanAll();
+    var newA = mesA.querySelector('.eca-avatar');
+    var newB = mesB.querySelector('.eca-avatar');
+    assert(newA.classList.contains('eca-audio-playing'), '重渲染后甲应恢复播放态：' + newA.className);
+    assert(newB.classList.contains('eca-audio-loading'), '重渲染后乙应恢复排队态：' + newB.className);
+    __tap(newB);                          // 在新元素上取消排队
+    assert(!newB.classList.contains('eca-audio-loading'), '新元素上再点应能取消排队：' + newB.className);
+    assert(newA.classList.contains('eca-audio-playing'), '取消乙不该影响在播的甲：' + newA.className);
+  });
+});
+
+
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
   __addFloor('{弗兰克(大笑)}“看不见的敌人？”弗兰克咧嘴一笑，那笑容里带着一股嗜血的狠劲。', false);
