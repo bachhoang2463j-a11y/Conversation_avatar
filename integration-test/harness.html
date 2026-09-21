@@ -264,7 +264,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.3.2', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.4.0', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1459,7 +1459,8 @@ test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', funct
   var api = window.EmoAvatar;
   ['setTtsEnabled', 'getTtsConfig', 'setTtsConfig', 'getVoiceConfig', 'setVoiceConfig',
     'extractQuotedText', 'getAvatarSpeech', 'refreshAudioButtons', 'getTtsCache',
-    'clearTtsCache', 'clearTtsMemory'].forEach(function (key) {
+    'clearTtsCache', 'clearTtsMemory', 'pingEdgeServers', 'getEdgeServers',
+    'getMimoCloneVoices', 'addMimoCloneVoice', 'deleteMimoCloneVoice'].forEach(function (key) {
     assert(typeof api[key] === 'function', '调试桥缺少 ' + key);
   });
   var cfg = api.getTtsConfig();
@@ -1860,12 +1861,108 @@ test('M10-18 语音设置：引擎含 MiMo、Edge 音色按语言分组且含云
     var mimoSel = vdlg.querySelector('#eca-mimo-voice');
     var mimoOptions = vdlg.querySelectorAll('#eca-mimo-voice option');
     assert(mimoOptions.length >= 9, 'MiMo 预置音色不足，实际 ' + mimoOptions.length);
-    var engineSel = vdlg.querySelector('#eca-voice-engine');
-    engineSel.value = 'mimo';
-    engineSel.dispatchEvent(new Event('change', { bubbles: true }));
-    assert(vdlg.querySelector('#eca-voice-id').value === mimoSel.value, '切到 MiMo 后音色 ID 应同步为所选 MiMo 音色，实际 ' + vdlg.querySelector('#eca-voice-id').value);
+    var mimoValues = Array.prototype.map.call(vdlg.querySelectorAll('#eca-mimo-voice option'), function (o) { return o.value; });
+    assert(mimoValues.indexOf(mimoSel.value) !== -1, 'MiMo 音色下拉当前值应落在候选项内，实际 ' + mimoSel.value);
     vdlg.querySelector('[data-audio-close]').click();
     panel.querySelector('.eca-close').click();
+  });
+});
+
+test('M10-19 语音设置按引擎隔离显示，不串字段', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  __seedM1();
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  return __wait(80).then(function () {
+    var row = panel.querySelector('#eca-char-list .eca-char-item');
+    assert(row, '角色列表为空');
+    row.click();
+    panel.querySelector('#eca-voice-btn').click();
+    var vdlg = document.getElementById('eca-voice-settings');
+    assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
+    var shown = function (sel) {
+      var el = vdlg.querySelector(sel);
+      var box = el && el.closest('[data-eca-for]');
+      return !!box && box.style.display !== 'none';
+    };
+    var engineSel = vdlg.querySelector('#eca-voice-engine');
+    // Edge：只露 Edge 字段
+    assert(shown('#eca-edge-voice'), 'Edge 引擎下应显示 Edge 音色');
+    assert(shown('#eca-edge-rate') && shown('#eca-edge-pitch'), 'Edge 引擎下应显示语速/音调');
+    assert(!shown('#eca-mimo-voice'), 'Edge 引擎下不应显示 MiMo 音色');
+    assert(!shown('#eca-voice-id'), 'Edge 引擎下不应显示音色 ID');
+    assert(!shown('#eca-resource-id'), 'Edge 引擎下不应显示豆包 Resource ID');
+    // 切到 MiMo：只露 MiMo，且下拉不残留 Edge 音色
+    engineSel.value = 'mimo'; engineSel.dispatchEvent(new Event('change', { bubbles: true }));
+    assert(shown('#eca-mimo-voice'), 'MiMo 引擎下应显示 MiMo 音色');
+    assert(!shown('#eca-edge-voice') && !shown('#eca-edge-rate'), 'MiMo 引擎下不应显示 Edge 字段');
+    assert(!shown('#eca-resource-id'), 'MiMo 引擎下不应显示豆包字段');
+    assert(vdlg.querySelector('#eca-mimo-voice').value === 'mimo_default', 'MiMo 下拉不应残留 Edge 音色，实际 ' + vdlg.querySelector('#eca-mimo-voice').value);
+    // 切到豆包：音色 ID 与 Resource ID 同现
+    engineSel.value = 'doubao'; engineSel.dispatchEvent(new Event('change', { bubbles: true }));
+    assert(shown('#eca-voice-id') && shown('#eca-resource-id'), '豆包引擎下应显示音色 ID 与 Resource ID');
+    assert(!shown('#eca-mimo-voice') && !shown('#eca-edge-voice'), '豆包引擎下不应显示其它引擎字段');
+    vdlg.querySelector('[data-audio-close]').click();
+    panel.querySelector('.eca-close').click();
+  });
+});
+
+test('M10-20 Edge 角色级语速/音调进请求，且改动会重新合成', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100 } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', rate: 20, pitch: -10 });
+  var mes = __addFloor('<p>{弗兰克(默认)}“语速音调测试。”</p>', false);
+  window.EmoAvatar.scanAll();
+  __buttons(mes)[0].click();
+  return __wait(160).then(function () {
+    var call = __lastTtsCall('edge');
+    assert(call, '应发出 Edge 请求');
+    assert(call.url.indexOf('r=20') !== -1, '角色语速应进请求，实际 ' + call.url);
+    assert(call.url.indexOf('p=-10') !== -1, '角色音调应进请求，实际 ' + call.url);
+    // 语速应进缓存键：改完必须重新合成，否则回放的是旧语速音频
+    window.__lastAudio.onended();
+    window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', rate: 35, pitch: -10 });
+    __buttons(mes)[0].click();
+    return __wait(160).then(function () {
+      assert(__countTtsCalls('edge') === 2, '改语速后应重新合成（参数须进缓存键），实际 ' + __countTtsCalls('edge') + ' 次');
+      assert(__lastTtsCall('edge').url.indexOf('r=35') !== -1, '第二次应用新语速，实际 ' + __lastTtsCall('edge').url);
+    });
+  });
+});
+
+test('M10-21 MiMo 复刻音色：添加后用 voiceclone 模型与 data URL 合成，删除后明确报错', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var b64 = btoa('RIFF-fake-reference-audio');
+  return window.EmoAvatar.addMimoCloneVoice({ nickname: '测试复刻', base64: b64, mime: 'audio/wav', sizeBytes: b64.length }).then(function (id) {
+    assert(typeof id === 'string' && id, '添加复刻音色应返回 id');
+    var list = window.EmoAvatar.getMimoCloneVoices();
+    assert(list.some(function (v) { return v.id === id; }), '复刻音色未写入配置');
+    window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav', cloneVoices: list } });
+    window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: 'clone:' + id });
+    var mes = __addFloor('<p>{弗兰克(默认)}“复刻测试。”</p>', false);
+    window.EmoAvatar.scanAll();
+    __buttons(mes)[0].click();
+    return __wait(220).then(function () {
+      var call = __lastTtsCall('mimo');
+      assert(call, '应发出 MiMo 请求');
+      assert(call.body.model === 'mimo-v2.5-tts-voiceclone', '复刻应改用 voiceclone 模型，实际 ' + call.body.model);
+      assert(/^data:audio\/wav;base64,/.test(String(call.body.audio.voice)), 'voice 应为参考音频 data URL，实际 ' + String(call.body.audio.voice).slice(0, 40));
+      assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount);
+      return window.EmoAvatar.deleteMimoCloneVoice(id);
+    }).then(function () {
+      assert(window.EmoAvatar.getMimoCloneVoices().length === 0, '删除后配置里不应再有该复刻音色');
+      window.__lastAudio.onended();
+      Array.prototype.forEach.call(document.querySelectorAll('.eca-toast'), function (t) { t.remove(); });
+      // 换一句台词，避开上一条已缓存的音频
+      var mes2 = __addFloor('<p>{弗兰克(默认)}“复刻删除后测试。”</p>', false);
+      window.EmoAvatar.scanAll();
+      __buttons(mes2)[0].click();
+      return __wait(220);
+    }).then(function () {
+      var toasts = Array.prototype.map.call(document.querySelectorAll('.eca-toast'), function (t) { return t.textContent; }).join(' | ');
+      assert(toasts.indexOf('复刻音色已不存在') !== -1, '删除后应提示复刻音色不存在，实际：' + toasts);
+    });
   });
 });
 
