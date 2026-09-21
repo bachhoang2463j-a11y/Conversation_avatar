@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.5.1';
+    const VERSION = '0.5.2';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -546,33 +546,74 @@
         return { contextText: '请用“' + emotion + '”的语气朗读这段话。' };
     }
 
+    function makeAbortError() {
+        try { return new topWindow.DOMException('The user aborted a request.', 'AbortError'); } catch (e) {
+            const err = new Error('已取消');
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function decodeBytes(buffer) {
+        const view = new Uint8Array(buffer || new ArrayBuffer(0));
+        if (typeof topWindow.TextDecoder === 'function') return new topWindow.TextDecoder().decode(view);
+        let text = '';
+        for (let i = 0; i < view.length; i++) text += String.fromCharCode(view[i]);
+        try { return decodeURIComponent(escape(text)); } catch (e) { return text; }
+    }
+
     /**
-     * 带超时的 fetch。outerSignal 为上层（取消合成）的中止柄：
-     * 它 abort 时同步中断本次请求，超时逻辑保持不变。
+     * 带超时的 HTTP 请求。**故意用 XHR 而不是 fetch**：酒馆里多个插件会包装 window.fetch 做
+     * 全局响应缓存（如 st-immersive-sound 的 tts-persistent-cache，按 host+path 判引擎并直接
+     * 返回它自己的缓存 Response）。走 fetch 时我方请求会被就地替换成第三方缓存——既发不出真实
+     * 请求，「重新生成」也永远拿不到新音频，而它的缓存键还会抹掉情绪等字段、可能串音。
+     * XHR 不经过 fetch，绕开这类补丁；返回对象保持 fetch Response 的用法（ok/status/headers/text/json/blob）。
+     * outerSignal 为上层（取消合成）的中止柄。
      */
     function fetchWithTimeout(url, options, timeout, outerSignal) {
-        const controller = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
-        const opts = Object.assign({}, options || {});
-        if (controller) opts.signal = controller.signal;
-        let timer = null;
-        let onOuterAbort = null;
-        if (controller && outerSignal) {
-            if (outerSignal.aborted) controller.abort();
-            else {
-                onOuterAbort = function () { controller.abort(); };
+        const opts = options || {};
+        return new Promise(function (resolve, reject) {
+            const xhr = new topWindow.XMLHttpRequest();
+            let settled = false;
+            let onOuterAbort = null;
+            const finish = function (fn, value) {
+                if (settled) return;
+                settled = true;
+                if (onOuterAbort && outerSignal && outerSignal.removeEventListener) outerSignal.removeEventListener('abort', onOuterAbort);
+                xhr.onload = null; xhr.onerror = null; xhr.ontimeout = null; xhr.onabort = null;
+                fn(value);
+            };
+            try {
+                xhr.open(String(opts.method || 'GET').toUpperCase(), url, true);
+            } catch (e) { reject(e); return; }
+            xhr.responseType = 'arraybuffer';
+            xhr.timeout = timeout || 15000;
+            const headers = opts.headers || {};
+            Object.keys(headers).forEach(function (name) {
+                try { xhr.setRequestHeader(name, headers[name]); } catch (e) { /* 非法头忽略 */ }
+            });
+            xhr.onload = function () {
+                const buffer = xhr.response || new ArrayBuffer(0);
+                const mime = (function () { try { return xhr.getResponseHeader('Content-Type') || ''; } catch (e) { return ''; } })();
+                finish(resolve, {
+                    ok: xhr.status >= 200 && xhr.status < 300,
+                    status: xhr.status,
+                    headers: { get: function (name) { try { return xhr.getResponseHeader(name); } catch (e) { return null; } } },
+                    text: function () { return Promise.resolve(decodeBytes(buffer)); },
+                    json: function () { return Promise.resolve(JSON.parse(decodeBytes(buffer) || 'null')); },
+                    blob: function () { return Promise.resolve(new topWindow.Blob([buffer], { type: mime || 'application/octet-stream' })); },
+                });
+            };
+            xhr.onerror = function () { finish(reject, new Error('NetworkError: 请求失败（网络不通或被拦截）')); };
+            xhr.ontimeout = function () { finish(reject, new Error('请求超时')); };
+            xhr.onabort = function () { finish(reject, makeAbortError()); };
+            if (outerSignal) {
+                if (outerSignal.aborted) { try { xhr.abort(); } catch (e) { /* 未发出 */ } return; }
+                onOuterAbort = function () { try { xhr.abort(); } catch (e) { /* 已结束 */ } };
                 outerSignal.addEventListener('abort', onOuterAbort);
             }
-        }
-        const cleanup = function () {
-            clearTimeout(timer);
-            if (onOuterAbort) outerSignal.removeEventListener('abort', onOuterAbort);
-        };
-        const promise = topWindow.fetch(url, opts);
-        if (!controller) return promise;
-        return Promise.race([
-            promise,
-            new Promise(function (_, reject) { timer = setTimeout(function () { controller.abort(); reject(new Error('请求超时')); }, timeout || 15000); }),
-        ]).then(function (result) { cleanup(); return result; }, function (error) { cleanup(); throw error; });
+            try { xhr.send(opts.body === undefined ? null : opts.body); } catch (e) { finish(reject, e); }
+        });
     }
 
     function ensureAudioResponse(response) {
@@ -1224,7 +1265,7 @@
             cancelLongPress();
             if (!target || !settings.ttsEnabled) return;
             if (target.isConnected === false) return; // 期间被重扫重建，旧元素已脱离文档
-            triggerCacheDialog(target, '按住不动 ' + LONG_PRESS_MS + 'ms');
+            triggerRegenerate(target, '按住不动 ' + LONG_PRESS_MS + 'ms');
             if (typeof navigator !== 'undefined' && navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* 无振动支持 */ } }
         }, LONG_PRESS_MS);
     }
@@ -1238,41 +1279,32 @@
     }
 
     /**
-     * 长按的统一入口。计时与「系统长按菜单 / 右键」（contextmenu）都可能触发，
-     * 用「本次手势是否已处理」标记去重——不用时间窗，因为确认弹窗会阻塞主线程，
-     * 等用户读完再点确定，墙钟早就跳过去了。
+     * 长按 / 右键的统一入口。计时与「系统长按菜单 / 右键」（contextmenu）都可能触发，
+     * 用「本次手势是否已处理」标记去重——不用时间窗，因为一个手势里两条路径只该生效一次。
      */
-    function triggerCacheDialog(avatar, source) {
+    function triggerRegenerate(avatar, source) {
         if (longPressHandled) return;
         longPressHandled = true;
         longPressEcho = true; // 这次手势带出的 click 一律不当作播放/停止
         dbg('长按触发（' + source + '）');
-        clearAvatarSpeechCache(avatar);
+        regenerateAvatarSpeech(avatar);
     }
 
-    /** 长按动作：该段有持久化缓存才提供「清缓存重生成」，没有则只提示 */
-    function clearAvatarSpeechCache(avatar) {
+    /**
+     * 长按 / 右键动作：强制重新生成这一段。
+     * 不弹确认、也不预先删缓存——直接绕过两层缓存重新请求，成功后新音频原地覆盖同一条记录，
+     * 失败则旧缓存原样保留（所以没有需要用户承担的风险，弹窗纯属多余）。
+     */
+    function regenerateAvatarSpeech(avatar) {
         const speech = getAvatarSpeech(avatar);
         if (!speech) { toast('这一段没有可朗读的对白（需要成对的引号）', true); return; }
         const voice = getVoiceConfig(speech.name);
         if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
         if (TTS_ENGINES.indexOf(voice.engine) === -1) { toast('语音引擎配置无效，请重新选择', true); return; }
-        const key = buildTtsKey(buildSpeechRequest(speech, voice));
-        // 直接查库，不受持久化开关影响：开关关掉后老记录仍在，长按要能清掉它
-        ttsGet(key).then(function (record) {
-            if (!record) { toast('这一段没有持久化缓存，无需清理', true); return; }
-            const snippet = speech.text.length > 24 ? speech.text.slice(0, 24) + '…' : speech.text;
-            const tip = '清除「' + speech.name + '」这一段的持久化缓存并重新生成？\n\n对白：' + snippet + '\n引擎：' + voice.engine + ' · 音色：' + voice.voiceId;
-            if (!uiConfirm(tip)) return;
-            return ttsDelete(key).then(function () {
-                ttsMemoryCache.delete(key);
-                toast('已清除该段缓存，正在重新生成…');
-                // 先停掉可能在播/在飞的旧音频，否则 playAvatarSpeech 会把这次点击当成「再点停止」
-                stopCurrentAudio();
-                // force：绕过两层缓存直接重新请求，杜绝「删了缓存却仍回放旧音频」这类情况
-                playAvatarSpeech(avatar, null, { force: true });
-            }, function (error) { toast('清除缓存失败：' + (error && error.message || error), true); });
-        }).catch(function (error) { toast('读取缓存失败：' + (error && error.message || error), true); });
+        toast('正在强制重新生成这一段…');
+        // 先停掉可能在播/在飞的旧音频，否则 playAvatarSpeech 会把这次手势当成「再点停止」
+        stopCurrentAudio();
+        playAvatarSpeech(avatar, null, { force: true });
     }
 
     function positionAudioButton() {
@@ -1334,7 +1366,7 @@
                     // 所以这里既挡掉系统菜单，也把 contextmenu 当作长按的可靠触发点（PC 上等价于右键）
                     event.preventDefault();
                     event.stopPropagation();
-                    triggerCacheDialog(avatar, '系统长按菜单/右键');
+                    triggerRegenerate(avatar, '系统长按菜单/右键');
                 });
                 // 原生图片拖拽会在按住时抢走指针流，直接禁用（头像本身也不该被拖走）
                 avatar.addEventListener('dragstart', function (event) { event.preventDefault(); });

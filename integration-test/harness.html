@@ -138,7 +138,9 @@ function __btn(label, fn, warn) {
 }
 
 /* ============================================================
- * TTS 桩：假 fetch + 假 Audio（不触网，只记录请求体供断言）
+ * TTS 桩：假 XHR + 假 fetch + 假 Audio（不触网，只记录请求体供断言）
+ * 插件侧合成走 XHR（刻意绕开酒馆里包装 window.fetch 的第三方缓存补丁），
+ * 所以桩必须以 XHR 为主；fetch 桩保留给页面其它用途。
  * ============================================================ */
 window.__fetchCalls = [];
 window.__fetchMode = 'ok';
@@ -149,73 +151,95 @@ window.__failStatus = 500;   // __fetchMode='fail' 时的 HTTP 状态码（500 �
 window.__fakeAudioBytes = [73, 68, 51, 4, 0, 0, 0, 0];
 function __audioBlob() { return new Blob([new Uint8Array(window.__fakeAudioBytes)], { type: 'audio/mpeg' }); }
 function __abortError() { return new DOMException('The user aborted a request.', 'AbortError'); }
-function __failResponse() {
-  return Promise.resolve({
-    ok: false, status: window.__failStatus,
-    headers: { get: function () { return null; } },
-    blob: function () { return Promise.resolve(new Blob()); },
-    json: function () { return Promise.resolve({}); },
-    text: function () { return Promise.resolve('server error'); },
-  });
+function __encodeText(text) { return new TextEncoder().encode(text).buffer; }
+function __b64OfFakeAudio() { return btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes)); }
+/* 统一决定这次请求回什么：失败判定 → 按端点给 JSON/NDJSON/音频字节 */
+function __buildResult(url) {
+  var u = String(url);
+  function fail() { return { ok: false, status: window.__failStatus, contentType: 'text/plain', text: 'server error' }; }
+  if (window.__fetchFailTimes > 0) { window.__fetchFailTimes--; return fail(); }
+  if (window.__fetchMode === 'fail') return fail();
+  for (var i = 0; i < window.__failHosts.length; i++) {
+    if (u.indexOf(window.__failHosts[i]) !== -1) return fail();
+  }
+  if (u.indexOf('/t2a_v2') !== -1) {
+    return { ok: true, status: 200, contentType: 'application/json', text: JSON.stringify({ base_resp: { status_code: 0 }, data: { audio: '49443304' }, extra_info: {} }) };
+  }
+  if (u.indexOf('openspeech.bytedance.com') !== -1) {
+    return { ok: true, status: 200, contentType: 'application/json', text: '{"code":0,"data":"' + __b64OfFakeAudio() + '"}\n{"code":20000000}\n' };
+  }
+  if (u.indexOf('/chat/completions') !== -1) {
+    return { ok: true, status: 200, contentType: 'application/json', text: JSON.stringify({ choices: [{ finish_reason: 'stop', message: { audio: { data: __b64OfFakeAudio(), format: 'wav' } } }] }) };
+  }
+  return { ok: true, status: 200, contentType: 'audio/mpeg', bytes: new Uint8Array(window.__fakeAudioBytes) };
+}
+function __recordCall(u, method, headers, payload) {
+  var rec = { url: String(u), method: String(method || 'GET').toUpperCase(), headers: headers || {}, body: null, at: Date.now(), aborted: false };
+  if (payload !== undefined && payload !== null) {
+    try { rec.body = typeof payload === 'string' ? JSON.parse(payload) : payload; }
+    catch (e) { rec.body = payload; }
+  }
+  window.__fetchCalls.push(rec);
+  return rec;
+}
+function __deliver(fn) {
+  if (window.__fetchDelayMs > 0) setTimeout(fn, window.__fetchDelayMs);
+  else fn();
 }
 window.fetch = function (url, options) {
   var opts = options || {};
-  var u = String(url);
-  var rec = { url: u, method: opts.method || 'GET', headers: opts.headers || {}, body: null, at: Date.now(), aborted: false };
-  if (opts.body) {
-    try { rec.body = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body; }
-    catch (e) { rec.body = opts.body; }
-  }
-  window.__fetchCalls.push(rec);
-  function build() {
-    if (window.__fetchFailTimes > 0) { window.__fetchFailTimes--; return __failResponse(); }
-    if (window.__fetchMode === 'fail') return __failResponse();
-    for (var i = 0; i < window.__failHosts.length; i++) {
-      if (u.indexOf(window.__failHosts[i]) !== -1) return __failResponse();
-    }
-    if (u.indexOf('/t2a_v2') !== -1) {
-      return Promise.resolve({
-        ok: true, status: 200,
-        headers: { get: function () { return 'application/json'; } },
-        json: function () { return Promise.resolve({ base_resp: { status_code: 0 }, data: { audio: '49443304' }, extra_info: {} }); },
-      });
-    }
-    if (u.indexOf('openspeech.bytedance.com') !== -1) {
-      var b64 = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
-      return Promise.resolve({
-        ok: true, status: 200,
-        headers: { get: function () { return 'application/json'; } },
-        text: function () { return Promise.resolve('{"code":0,"data":"' + b64 + '"}\n{"code":20000000}\n'); },
-      });
-    }
-    if (u.indexOf('/chat/completions') !== -1) {
-      var b64m = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
-      return Promise.resolve({
-        ok: true, status: 200,
-        headers: { get: function () { return 'application/json'; } },
-        json: function () { return Promise.resolve({ choices: [{ finish_reason: 'stop', message: { audio: { data: b64m, format: 'wav' } } }] }); },
-      });
-    }
-    return Promise.resolve({
-      ok: true, status: 200,
-      headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? 'audio/mpeg' : null; } },
-      blob: function () { return Promise.resolve(__audioBlob()); },
-    });
-  }
+  var rec = __recordCall(url, opts.method, opts.headers, opts.body);
   // 与真实 fetch 一致地尊重 signal：abort 后 reject(AbortError)，并记录 aborted 供断言
   return new Promise(function (resolve, reject) {
     function deliver() {
       if (rec.aborted) return;
       if (opts.signal && opts.signal.aborted) { rec.aborted = true; reject(__abortError()); return; }
-      resolve(build());
+      var r = __buildResult(url);
+      resolve({
+        ok: r.ok, status: r.status,
+        headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? r.contentType : (String(k).toLowerCase() === 'content-type' ? r.contentType : null); } },
+        blob: function () { return Promise.resolve(r.bytes ? new Blob([r.bytes], { type: r.contentType }) : __audioBlob()); },
+        json: function () { return Promise.resolve(r.text ? JSON.parse(r.text) : {}); },
+        text: function () { return Promise.resolve(r.text || ''); },
+      });
     }
     if (opts.signal) {
       if (opts.signal.aborted) { rec.aborted = true; reject(__abortError()); return; }
       opts.signal.addEventListener('abort', function () { rec.aborted = true; reject(__abortError()); });
     }
-    if (window.__fetchDelayMs > 0) setTimeout(deliver, window.__fetchDelayMs);
-    else deliver();
+    __deliver(deliver);
   });
+};
+/* 假 XHR：插件合成实际走的通道。接口形状与真实 XMLHttpRequest 的最小可用子集一致 */
+window.XMLHttpRequest = function () {
+  var self = this;
+  var url = '', method = 'GET', reqHeaders = {}, rec = null, aborted = false, sent = false, contentType = '';
+  this.readyState = 0; this.status = 0; this.response = null; this.timeout = 0;
+  this.onload = null; this.onerror = null; this.ontimeout = null; this.onabort = null;
+  this.open = function (m, u) { method = String(m).toUpperCase(); url = String(u); self.readyState = 1; };
+  this.setRequestHeader = function (k, v) { reqHeaders[k] = v; };
+  this.getResponseHeader = function (k) { return String(k).toLowerCase() === 'content-type' ? (contentType || null) : null; };
+  this.getAllResponseHeaders = function () { return ''; };
+  this.abort = function () {
+    aborted = true;
+    if (rec) rec.aborted = true;
+    if (self.onabort) self.onabort();
+  };
+  this.send = function (payload) {
+    if (sent) return;
+    sent = true;
+    rec = __recordCall(url, method, reqHeaders, payload === undefined ? null : payload);
+    __deliver(function () {
+      if (aborted || rec.aborted) return;
+      var r = __buildResult(url);
+      self.status = r.status;
+      contentType = r.contentType || '';
+      self.response = r.bytes ? r.bytes.buffer.slice(0) : __encodeText(r.text || '');
+      self.readyState = 4;
+      // 与真实 XHR 一致：HTTP 4xx/5xx 也是正常响应（走 onload），只有网络层失败才 onerror
+      if (self.onload) self.onload();
+    });
+  };
 };
 window.__audioInstances = [];
 window.__audioPlayCount = 0;
@@ -287,7 +311,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.5.1', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.5.2', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -2149,7 +2173,7 @@ test('M10-25 持久化开关勾选即落盘；关闭后不再写入/命中，旧
     });
   });
 });
-test('M10-26 长按头像：有持久化缓存才弹确认，确认后清缓存并重新生成', function () {
+test('M10-26 长按头像：直接强制重生成（无确认弹窗），无缓存时同样生效', function () {
   __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
   window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
@@ -2165,30 +2189,36 @@ test('M10-26 长按头像：有持久化缓存才弹确认，确认后清缓存�
     assert(records.filter(function (r) { return r.text.indexOf('长按清理用例') !== -1; }).length === 1, '前置条件：该段应有 1 条持久化缓存');
     assert(window.__audioPlayCount === 1, '前置条件：首次点击应播放一次，实际 ' + window.__audioPlayCount);
     window.__confirmMessages = [];
-    window.__confirmValue = true;
-    return __longPress(btn, 700);         // 按住不动 → 600ms 触发长按
+    window.__fetchCalls = [];
+    window.__lastAudio.onended();
+    return __longPress(btn, 700);         // 按住不动 → 600ms 触发
   }).then(function () {
-    return __wait(280);
+    return __wait(400);
   }).then(function () {
-    assert(window.__confirmMessages.length === 1, '长按有缓存应弹一次确认，实际 ' + window.__confirmMessages.length + ' 次');
-    assert(window.__confirmMessages[0].indexOf('弗兰克') !== -1 && window.__confirmMessages[0].indexOf('长按清理用例') !== -1,
-      '确认文案应含角色与对白：' + window.__confirmMessages[0]);
-    assert(__countTtsCalls('mimo') === 2, '确认后应重新合成（命中缓存就不会再发请求），实际 ' + __countTtsCalls('mimo') + ' 次');
-    assert(window.__audioPlayCount === 2, '确认后应重新播放，实际 ' + window.__audioPlayCount + ' 次');
-    assert(__toasts().indexOf('已清除该段缓存') !== -1, '应提示正在重新生成：' + __toasts());
-    // 无缓存的段落：长按只提示，不弹确认
+    assert(window.__confirmMessages.length === 0, '不应再弹确认窗（已改为直接重生成），实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '长按应直接重新请求一次，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__toasts().indexOf('正在强制重新生成') !== -1, '应提示正在重新生成：' + __toasts());
+    assert(__toasts().indexOf('已重新生成（本次未使用缓存）') !== -1, '应回报本次未使用缓存：' + __toasts());
+    assert(window.__audioPlayCount === 2, '应播放新音频（首次 + 重生成），实际 ' + window.__audioPlayCount + ' 次');
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.text.indexOf('长按清理用例') !== -1; }).length === 1,
+      '重生成应原地覆盖同一条缓存而不新增，实际 ' + records.length + ' 条');
+    // 没有缓存的段落：长按同样直接重生成（不再有空转提示）
     window.EmoAvatar.clearTtsMemory();
     return window.EmoAvatar.clearTtsCache();
   }).then(function () {
     __clearToasts();
     window.__confirmMessages = [];
+    window.__fetchCalls = [];
     window.EmoAvatar.scanAll();
     return __longPress(__buttons(mes)[0], 700);
   }).then(function () {
-    return __wait(200);
+    return __wait(400);
   }).then(function () {
-    assert(window.__confirmMessages.length === 0, '无缓存时不应弹确认：' + window.__confirmMessages.join(' / '));
-    assert(__toasts().indexOf('没有持久化缓存') !== -1, '无缓存时应提示没有缓存：' + __toasts());
+    assert(window.__confirmMessages.length === 0, '无缓存时也不应弹确认：' + window.__confirmMessages.join(' / '));
+    assert(__countTtsCalls('mimo') === 1, '无缓存时长按应直接重新生成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__toasts().indexOf('已重新生成（本次未使用缓存）') !== -1, '应回报重新生成结果：' + __toasts());
   });
 });
 test('M10-27 长按后随后的那次 click 不会误触发播放', function () {
@@ -2200,18 +2230,22 @@ test('M10-27 长按后随后的那次 click 不会误触发播放', function () 
   var btn = __buttons(mes)[0];
   return window.EmoAvatar.clearTtsCache().then(function () {
     window.EmoAvatar.clearTtsMemory();
-    return __longPress(btn, 700);
+    return __longPress(btn, 700);         // 长按本身会发起一次重生成
   }).then(function () {
+    return __wait(260);
+  }).then(function () {
+    var before = __countTtsCalls('mimo');
+    var playsBefore = window.__audioPlayCount;
     btn.click();                          // 长按松手带出的那次 click（无 pointerdown）
-    assert(__countTtsCalls('mimo') === 0, '长按后的 click 不应发起合成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__countTtsCalls('mimo') === before, '长按回响不应再发起合成，实际 ' + __countTtsCalls('mimo') + ' 次（此前 ' + before + '）');
+    assert(window.__audioPlayCount === playsBefore, '长按回响不应打断或重启播放，实际 ' + window.__audioPlayCount + ' 次');
     assert(!btn.classList.contains('eca-audio-loading'), '长按后的 click 不应进入加载态：' + btn.className);
-    return __wait(120);
-  }).then(function () {
-    __tap(btn);                           // 真实点击（带 pointerdown）：回响作废，应正常播放
+    assert(btn.classList.contains('eca-audio-playing'), '重生成后应保持播放态：' + btn.className);
+    window.__lastAudio.onended();
+    __tap(btn);                           // 真实点击（带 pointerdown）：回响作废，应正常（缓存）播放
     return __wait(160);
   }).then(function () {
-    assert(__countTtsCalls('mimo') === 1, '真实点击应正常播放，实际 ' + __countTtsCalls('mimo') + ' 次');
-    assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(window.__audioPlayCount === 2, '真实点击应正常播放，实际 ' + window.__audioPlayCount + ' 次');
   });
 });
 test('M10-28 豆包：音色内置下拉含大壹，Resource ID 内置且空值回落', function () {
@@ -2261,7 +2295,7 @@ test('M10-28 豆包：音色内置下拉含大壹，Resource ID 内置且空值�
   });
 });
 
-test('M10-29 长按回响 click 不受弹窗耗时影响；强制重生成绕过缓存并回报结果', function () {
+test('M10-29 长按回响 click 不随时间失效；强制重生成绕过缓存并回报结果', function () {
   __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
   window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
@@ -2275,17 +2309,14 @@ test('M10-29 长按回响 click 不受弹窗耗时影响；强制重生成绕过
   }).then(function () {
     assert(window.__audioPlayCount === 1, '首次点击应播放，实际 ' + window.__audioPlayCount + ' 次');
     window.__lastAudio.onended();
-    window.__confirmMessages = [];
-    window.__confirmValue = true;
     window.__fetchCalls = [];
-    return __longPress(btn, 700);          // 长按 → 确认 → 清缓存 + 强制重生成
+    return __longPress(btn, 700);          // 长按 → 直接强制重生成
   }).then(function () {
-    return __wait(240);
+    return __wait(300);
   }).then(function () {
-    assert(window.__confirmMessages.length === 1, '应弹一次确认，实际 ' + window.__confirmMessages.length + ' 次');
-    assert(__countTtsCalls('mimo') === 1, '确认后应重新请求一次，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '长按应重新请求一次，实际 ' + __countTtsCalls('mimo') + ' 次');
     assert(__toasts().indexOf('已重新生成（本次未使用缓存）') !== -1, '应回报本次未使用缓存：' + __toasts());
-    // 模拟确认弹窗停留很久：2 秒后才到达的长按回响 click 也必须被拦下（按固定计时会漏掉）
+    // 即便过了 2 秒才到达的长按回响 click 也必须被拦下（按固定计时会漏掉）
     return __wait(2000);
   }).then(function () {
     btn.click();
@@ -2316,14 +2347,11 @@ test('M10-30 长按位移容差：鼠标小幅抖动不取消，触摸大位移�
     return __wait(900);
   }).then(function () {
     __pointer(btn, 'pointerup', 31, 31, 'mouse');
-    return __wait(500);                    // 确认框前有一次 IndexedDB 查询，异步回来需要时间
+    return __wait(400);
   }).then(function () {
-    assert(window.__confirmMessages.length === 1, '鼠标小幅抖动不应取消长按，实际确认 ' + window.__confirmMessages.length + ' 次');
-    return __wait(200);
-  }).then(function () {
-    assert(__countTtsCalls('mimo') === 1, '鼠标抖动长按后应重新生成（1 次请求），实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__confirmMessages.length === 0, '已无确认弹窗，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '鼠标小幅抖动不应取消长按：应触发一次重生成，实际 ' + __countTtsCalls('mimo') + ' 次');
     window.__lastAudio.onended();
-    window.__confirmMessages = [];
     window.__fetchCalls = [];
     // 触摸拖动 ≈56px：应让位给滚动，取消长按
     __pointer(btn, 'pointerdown', 20, 20, 'touch');
@@ -2333,8 +2361,7 @@ test('M10-30 长按位移容差：鼠标小幅抖动不取消，触摸大位移�
     __pointer(btn, 'pointerup', 60, 60, 'touch');
     return __wait(400);
   }).then(function () {
-    assert(window.__confirmMessages.length === 0, '触摸移动超阈值应取消长按，实际确认 ' + window.__confirmMessages.length + ' 次');
-    assert(__countTtsCalls('mimo') === 0, '被取消的长按不应发起请求，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(__countTtsCalls('mimo') === 0, '触摸移动超阈值应取消长按、不发起请求，实际 ' + __countTtsCalls('mimo') + ' 次');
     // 松手后的点击 = 普通播放：命中刚才的缓存，不应再发请求
     __tap(btn);
     return __wait(200);
@@ -2343,7 +2370,7 @@ test('M10-30 长按位移容差：鼠标小幅抖动不取消，触摸大位移�
     assert(window.__audioPlayCount === 3, '应播放第 3 次（首次合成 + 重生成 + 缓存回放），实际 ' + window.__audioPlayCount + ' 次');
   });
 });
-test('M10-31 右键/系统长按菜单同样触发清缓存重生成，且与计时去重', function () {
+test('M10-31 右键/系统长按菜单同样触发强制重生成，且与计时去重', function () {
   __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
   window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
@@ -2361,16 +2388,37 @@ test('M10-31 右键/系统长按菜单同样触发清缓存重生成，且与计
     var ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     btn.dispatchEvent(ev);
     assert(ev.defaultPrevented, '有语音的头像上右键应被拦下，不弹系统菜单');
-    return __wait(700);                    // 确认框前有一次 IndexedDB 查询
-  }).then(function () {
-    assert(window.__confirmMessages.length === 1, '右键应触发一次确认，实际 ' + window.__confirmMessages.length + ' 次');
-    assert(__countTtsCalls('mimo') === 1, '右键确认后应重新生成，实际 ' + __countTtsCalls('mimo') + ' 次');
-    // 同一次手势内再来一次（模拟「计时 + 系统菜单」先后到达）：不应重复弹窗或重复请求
-    btn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
     return __wait(400);
   }).then(function () {
-    assert(window.__confirmMessages.length === 1, '去重窗口内不应重复弹确认，实际 ' + window.__confirmMessages.length + ' 次');
-    assert(__countTtsCalls('mimo') === 1, '去重窗口内不应重复请求，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__confirmMessages.length === 0, '右键不再弹确认，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '右键应直接重新生成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    // 同一次手势内再来一次（模拟「计时 + 系统菜单」先后到达）：不应重复触发
+    btn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    return __wait(300);
+  }).then(function () {
+    assert(__countTtsCalls('mimo') === 1, '同一次手势内不应重复请求，实际 ' + __countTtsCalls('mimo') + ' 次');
+  });
+});
+
+test('M10-32 合成不走 window.fetch（防第三方 fetch 缓存补丁截获）', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“通道用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  // 模拟酒馆里包装 window.fetch 做全局响应缓存的第三方插件：它一旦被调用就会回自己的缓存
+  var fetchHits = 0;
+  var origFetch = window.fetch;
+  window.fetch = function () { fetchHits++; return origFetch.apply(this, arguments); };
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(__buttons(mes)[0]);
+    return __wait(220);
+  }).then(function () {
+    window.fetch = origFetch;
+    assert(fetchHits === 0, '合成不应经过 window.fetch（会被第三方缓存补丁截获），实际调用 ' + fetchHits + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '合成应经由 XHR 发出并只发一次，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 1, '应正常播放，实际 ' + window.__audioPlayCount + ' 次');
   });
 });
 
