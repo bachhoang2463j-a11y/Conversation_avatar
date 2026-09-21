@@ -287,7 +287,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.5.0', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.5.1', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1483,9 +1483,9 @@ function __ttsReset() {
 }
 function __buttons(mes) { return mes.querySelectorAll('.eca-avatar.eca-has-speech'); }
 /* 长按手势：派发 pointer 事件（触摸/鼠标同判定），由 __longPress 保证按住超过 LONG_PRESS_MS */
-function __pointer(el, type, x, y) {
+function __pointer(el, type, x, y, pointerType) {
   el.dispatchEvent(new PointerEvent(type, {
-    bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch',
+    bubbles: true, cancelable: true, pointerId: 1, pointerType: pointerType || 'touch',
     button: 0, buttons: 1, clientX: x || 0, clientY: y || 0,
   }));
 }
@@ -2292,6 +2292,85 @@ test('M10-29 长按回响 click 不受弹窗耗时影响；强制重生成绕过
     assert(__countTtsCalls('mimo') === 1, '长按回响不应再发起请求，实际 ' + __countTtsCalls('mimo') + ' 次');
     assert(window.__audioPlayCount === 2, '长按回响不应打断或重启播放，实际 ' + window.__audioPlayCount + ' 次');
     assert(btn.classList.contains('eca-audio-playing'), '重生成后应处于播放态：' + btn.className);
+  });
+});
+
+test('M10-30 长按位移容差：鼠标小幅抖动不取消，触摸大位移才取消', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“长按容差用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btn);                            // 先合成一次，让该段有持久化缓存
+    return __wait(160);
+  }).then(function () {
+    window.__lastAudio.onended();
+    window.__confirmMessages = [];
+    window.__fetchCalls = [];
+    // 鼠标按住时抖动 ≈15.5px：旧实现的 10px 阈值会误取消长按，PC 上几乎必然踩到
+    __pointer(btn, 'pointerdown', 20, 20, 'mouse');
+    __pointer(btn, 'pointermove', 31, 31, 'mouse');
+    return __wait(900);
+  }).then(function () {
+    __pointer(btn, 'pointerup', 31, 31, 'mouse');
+    return __wait(500);                    // 确认框前有一次 IndexedDB 查询，异步回来需要时间
+  }).then(function () {
+    assert(window.__confirmMessages.length === 1, '鼠标小幅抖动不应取消长按，实际确认 ' + window.__confirmMessages.length + ' 次');
+    return __wait(200);
+  }).then(function () {
+    assert(__countTtsCalls('mimo') === 1, '鼠标抖动长按后应重新生成（1 次请求），实际 ' + __countTtsCalls('mimo') + ' 次');
+    window.__lastAudio.onended();
+    window.__confirmMessages = [];
+    window.__fetchCalls = [];
+    // 触摸拖动 ≈56px：应让位给滚动，取消长按
+    __pointer(btn, 'pointerdown', 20, 20, 'touch');
+    __pointer(btn, 'pointermove', 60, 60, 'touch');
+    return __wait(900);
+  }).then(function () {
+    __pointer(btn, 'pointerup', 60, 60, 'touch');
+    return __wait(400);
+  }).then(function () {
+    assert(window.__confirmMessages.length === 0, '触摸移动超阈值应取消长按，实际确认 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 0, '被取消的长按不应发起请求，实际 ' + __countTtsCalls('mimo') + ' 次');
+    // 松手后的点击 = 普通播放：命中刚才的缓存，不应再发请求
+    __tap(btn);
+    return __wait(200);
+  }).then(function () {
+    assert(__countTtsCalls('mimo') === 0, '长按被取消后的点击应是普通缓存回放而非重生成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    assert(window.__audioPlayCount === 3, '应播放第 3 次（首次合成 + 重生成 + 缓存回放），实际 ' + window.__audioPlayCount + ' 次');
+  });
+});
+test('M10-31 右键/系统长按菜单同样触发清缓存重生成，且与计时去重', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“右键重生成用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btn);
+    return __wait(160);
+  }).then(function () {
+    window.__lastAudio.onended();
+    window.__confirmMessages = [];
+    window.__fetchCalls = [];
+    var ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    btn.dispatchEvent(ev);
+    assert(ev.defaultPrevented, '有语音的头像上右键应被拦下，不弹系统菜单');
+    return __wait(700);                    // 确认框前有一次 IndexedDB 查询
+  }).then(function () {
+    assert(window.__confirmMessages.length === 1, '右键应触发一次确认，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '右键确认后应重新生成，实际 ' + __countTtsCalls('mimo') + ' 次');
+    // 同一次手势内再来一次（模拟「计时 + 系统菜单」先后到达）：不应重复弹窗或重复请求
+    btn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    return __wait(400);
+  }).then(function () {
+    assert(window.__confirmMessages.length === 1, '去重窗口内不应重复弹确认，实际 ' + window.__confirmMessages.length + ' 次');
+    assert(__countTtsCalls('mimo') === 1, '去重窗口内不应重复请求，实际 ' + __countTtsCalls('mimo') + ' 次');
   });
 });
 

@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.5.0';
+    const VERSION = '0.5.1';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -126,7 +126,9 @@
     ];
     /** 长按头像清缓存重生成：触摸与鼠标同判定（按住不动 600ms），位移超阈值即取消 */
     const LONG_PRESS_MS = 600;
-    const LONG_PRESS_MOVE_PX = 10;
+    /** 位移容差：鼠标按住时手抖很容易超过 10px，触摸则要尽早让位给滚动，故分开取值 */
+    const LONG_PRESS_MOVE_PX = 24;
+    const LONG_PRESS_MOVE_TOUCH_PX = 12;
     /** 同引擎失败自动重试一次（间隔 500ms）：只吸收网络抖动，不切换引擎、不改并发策略 */
     const TTS_RETRY_DELAY_MS = 500;
     /** 重复加载检测标记：同一页面加载两份脚本会让两套状态抢同一批头像 */
@@ -189,6 +191,8 @@
     let longPressStartY = 0;
     /** 长按已触发：在这次手势结束前到达的 click 都是长按的回响，不能当成播放/停止 */
     let longPressEcho = false;
+    /** 本次手势是否已处理过长按：计时与「系统长按菜单/右键」两条路径只用一次，避免弹两次确认 */
+    let longPressHandled = false;
     /** 上一次加载的实例版本（重复加载时用于告警），null 表示干净 */
     let previousInstance = null;
     /** 本实例挂到 topWindow 的桥对象：与 topWindow.EmoAvatar 不一致即说明被后加载的另一份脚本顶掉了 */
@@ -1204,11 +1208,13 @@
     }
 
     function onAvatarPointerDown(event) {
+        // 新手势开始：此前长按留下的回响 click 与「已处理」标记都作废
+        // （真实点击/右键总是先有 pointerdown；右键的 button 不是 0，下面才拦掉）
+        longPressEcho = false;
+        longPressHandled = false;
         if (event.button !== undefined && event.button !== 0 && event.pointerType !== 'touch') return;
         const avatar = event.currentTarget;
         cancelLongPress();
-        // 新手势开始：此前长按留下的回响 click 到此作废（真实点击总是先有 pointerdown）
-        longPressEcho = false;
         longPressTarget = avatar;
         longPressStartX = Number(event.clientX) || 0;
         longPressStartY = Number(event.clientY) || 0;
@@ -1218,9 +1224,8 @@
             cancelLongPress();
             if (!target || !settings.ttsEnabled) return;
             if (target.isConnected === false) return; // 期间被重扫重建，旧元素已脱离文档
-            longPressEcho = true;
+            triggerCacheDialog(target, '按住不动 ' + LONG_PRESS_MS + 'ms');
             if (typeof navigator !== 'undefined' && navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* 无振动支持 */ } }
-            clearAvatarSpeechCache(target);
         }, LONG_PRESS_MS);
     }
 
@@ -1228,7 +1233,21 @@
         if (longPressTimer === null) return;
         const dx = (Number(event.clientX) || 0) - longPressStartX;
         const dy = (Number(event.clientY) || 0) - longPressStartY;
-        if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_PX) cancelLongPress();
+        const limit = event.pointerType === 'touch' ? LONG_PRESS_MOVE_TOUCH_PX : LONG_PRESS_MOVE_PX;
+        if (Math.sqrt(dx * dx + dy * dy) > limit) cancelLongPress();
+    }
+
+    /**
+     * 长按的统一入口。计时与「系统长按菜单 / 右键」（contextmenu）都可能触发，
+     * 用「本次手势是否已处理」标记去重——不用时间窗，因为确认弹窗会阻塞主线程，
+     * 等用户读完再点确定，墙钟早就跳过去了。
+     */
+    function triggerCacheDialog(avatar, source) {
+        if (longPressHandled) return;
+        longPressHandled = true;
+        longPressEcho = true; // 这次手势带出的 click 一律不当作播放/停止
+        dbg('长按触发（' + source + '）');
+        clearAvatarSpeechCache(avatar);
     }
 
     /** 长按动作：该段有持久化缓存才提供「清缓存重生成」，没有则只提示 */
@@ -1284,7 +1303,7 @@
                 return;
             }
             avatar.classList.add('eca-has-speech');
-            avatar.title = '点击播放「' + speech.name + '」对白 · 长按清缓存重生成';
+            avatar.title = '点击播放「' + speech.name + '」对白 · 长按（或右键）清缓存重生成';
             avatar.setAttribute('aria-label', avatar.title);
             applyAudioStateToAvatar(avatar, speech);
 
@@ -1310,12 +1329,15 @@
                 avatar.addEventListener('pointercancel', cancelLongPress);
                 avatar.addEventListener('pointerleave', cancelLongPress);
                 avatar.addEventListener('contextmenu', function (event) {
-                    // 只挡「长按自己的菜单」，正常右键菜单不受影响
-                    if (longPressTarget === avatar || longPressEcho) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                    }
+                    if (!settings.ttsEnabled) return;
+                    // 触摸长按时浏览器常先接管手势（弹系统菜单、并 cancel 指针流），
+                    // 所以这里既挡掉系统菜单，也把 contextmenu 当作长按的可靠触发点（PC 上等价于右键）
+                    event.preventDefault();
+                    event.stopPropagation();
+                    triggerCacheDialog(avatar, '系统长按菜单/右键');
                 });
+                // 原生图片拖拽会在按住时抢走指针流，直接禁用（头像本身也不该被拖走）
+                avatar.addEventListener('dragstart', function (event) { event.preventDefault(); });
             }
         });
     }
