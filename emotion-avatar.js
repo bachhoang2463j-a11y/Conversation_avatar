@@ -1028,23 +1028,30 @@
     }
 
     /**
+     * 只查缓存、不合成（内存 → 持久化；命中会写回内存缓存）。
+     * 除了正常取音频，第二音色的「已经生成过就优先用」判定也走这里。
+     */
+    function readCachedAudio(request) {
+        const key = buildTtsKey(request);
+        if (ttsMemoryCache.has(key)) {
+            const hit = ttsMemoryCache.get(key);
+            return Promise.resolve({ key: key, blob: hit.blob, mime: hit.mime, cached: true });
+        }
+        return loadPersistentTts(key).then(function (record) {
+            if (!record) return null;
+            ttsMemoryCache.set(key, { blob: record.blob, mime: record.mime });
+            return { key: key, blob: record.blob, mime: record.mime, cached: true };
+        });
+    }
+
+    /**
      * 取音频：内存 → 持久化 → 真正合成；命中任一层都不再消耗合成额度。
      * options.force = true 时跳过两层缓存的读取，直接重新请求（长按清缓存重生成走这条）。
      */
     function getOrCreateAudio(text, request, options) {
         const key = buildTtsKey(request);
         const force = !!(options && options.force);
-        const fromCache = function () {
-            if (ttsMemoryCache.has(key)) {
-                const hit = ttsMemoryCache.get(key);
-                return Promise.resolve({ key: key, blob: hit.blob, mime: hit.mime, cached: true });
-            }
-            return loadPersistentTts(key).then(function (record) {
-                if (!record) return null;
-                ttsMemoryCache.set(key, { blob: record.blob, mime: record.mime });
-                return { key: key, blob: record.blob, mime: record.mime, cached: true };
-            });
-        };
+        const fromCache = function () { return readCachedAudio(request); };
         const synthesize = function () {
             return synthesizeTts(text, request).then(function (result) {
                 ttsMemoryCache.set(key, result);
@@ -1244,11 +1251,6 @@
         avatar.classList.add(entry.phase === 'playing' ? 'eca-audio-playing' : 'eca-audio-loading');
     }
 
-    /** 该角色是否配置了可用的第二音色：未配置时双击头像无影响 */
-    function hasAltVoice(name) {
-        return !!pickVoice(getVoiceConfig(name), 'alt');
-    }
-
     /** 取本次要用的那套音色：primary = 第一音色；alt = 第二音色（未配置返回 null） */
     function pickVoice(voice, mode) {
         if (!voice) return null;
@@ -1258,20 +1260,32 @@
         return picked;
     }
 
+    /** 该配置能不能支撑这次要用的音色；'auto' = 两套任选（由缓存优先级决定） */
+    function canUseVoice(voice, mode) {
+        if (mode === 'alt') return !!pickVoice(voice, 'alt');
+        if (mode === 'primary') return !!pickVoice(voice, 'primary');
+        return !!pickVoice(voice, 'alt') || !!pickVoice(voice, 'primary');
+    }
+
+    /** 该角色是否配了可用的第二音色：决定头像提示语与双击判定是否生效 */
+    function hasAltVoice(name) {
+        return canUseVoice(getVoiceConfig(name), 'alt');
+    }
+
     /**
-     * 用过第二音色后，清掉这一段第一音色的缓存（内存 + 持久化两层）。
-     * 否则用户之后单击这颗头像会听到「第一音色早先生成、已被淘汰的那一版」，像是换音色没生效；
-     * 只删这一段（同角色 + 同文本 + 第一音色的那一个键），第二音色自己的缓存与别段都不动。
+     * 「这次该用哪套音色」的默认判定：**第二音色只要已经生成过这一段（缓存里有这一版）就优先用它**。
+     * 用过就优先，不需要另记状态——缓存本身就是状态；缓存里没有才回落到第一音色。
+     * 双击是明确指定第二音色，不走这套判定。
      */
-    function dropPrimaryVoiceCache(speech, altVoice) {
-        const primary = pickVoice(getVoiceConfig(speech.name), 'primary');
-        if (!primary) return;
-        const primaryKey = buildTtsKey(buildSpeechRequest(speech, primary));
-        // 两套音色配置完全一样时这个键就是刚生成的那一份，别自删
-        if (primaryKey === buildTtsKey(buildSpeechRequest(speech, altVoice))) return;
-        const inMemory = ttsMemoryCache.delete(primaryKey);
-        ttsDelete(primaryKey).catch(function () { /* 清不掉不影响本次播放，下次至多再回放一次旧版 */ });
-        dbg('用过第二音色，清除该段第一音色缓存（内存' + (inMemory ? '已删' : '无此条') + '）：' + String(speech.text).slice(0, 12));
+    function resolvePreferredVoiceMode(speech, voice) {
+        const primary = pickVoice(voice, 'primary');
+        const alt = pickVoice(voice, 'alt');
+        if (!alt) return Promise.resolve('primary');
+        if (!primary) return Promise.resolve('alt');
+        const altRequest = buildSpeechRequest(speech, alt);
+        // 两套配置完全一样时缓存键也相同，没什么可挑的
+        if (buildTtsKey(altRequest) === buildTtsKey(buildSpeechRequest(speech, primary))) return Promise.resolve('primary');
+        return readCachedAudio(altRequest).then(function (hit) { return hit ? 'alt' : 'primary'; });
     }
 
     /** 播放与长按共用同一套请求装配，保证两处算出的缓存键完全一致 */
@@ -1285,44 +1299,48 @@
 
     function createAudioEntry(speech, key, voiceMode, avatar, force) {
         return {
+            // voiceMode：'auto' = 待判定（第二音色缓存优先，见 resolvePreferredVoiceMode）｜'primary'｜'alt'
             key: key, name: speech.name, text: speech.text, voiceMode: voiceMode,
             avatar: avatar, force: !!force,
-            phase: 'loading',   // loading（合成中）→ ready（就绪待播）→ playing（正在播）
+            phase: 'loading',   // loading（合成中/待判定）→ ready（就绪待播）→ playing（正在播）
             abort: null, blob: null, mime: '', url: '', audio: null,
         };
     }
 
     /**
      * 点播/长按的统一入口：**不打断别人**——新的一段立即进入加载态开始合成，就绪后排在队尾，
-     * 等前一段播完自动接播。同一条目再点 = 取消；换音色（双击）或强制重生成则原地替换、保持队列位置。
-     * options.voiceMode：'primary'（第一音色，默认）| 'alt'（第二音色）
+     * 等前一段播完自动接播。单击同一条目再点 = 取消；换音色（双击）或强制重生成则原地替换、保持队列位置。
+     * options.voiceMode：'alt' = 明确用第二音色（双击），'primary' = 明确用第一音色；不传 = 单击的默认判定
      * options.force：绕过两层缓存重新合成（长按/右键）
      */
     function enqueueAvatarSpeech(avatar, options) {
         if (!avatar) return;
-        const voiceMode = options && options.voiceMode === 'alt' ? 'alt' : 'primary';
+        const wanted = options && options.voiceMode;
+        const explicitMode = (wanted === 'alt' || wanted === 'primary') ? wanted : '';
         const force = !!(options && options.force);
         const speech = getAvatarSpeech(avatar);
         if (!speech) { toast('这一段没有可朗读的对白（需要成对的引号）', true); return; }
         const voice = getVoiceConfig(speech.name);
-        const picked = pickVoice(voice, voiceMode);
-        if (!picked) {
+        if (!canUseVoice(voice, explicitMode || 'auto')) {
             // 未配置第二音色时双击应当「无影响」：静默返回，不打扰用户
-            if (voiceMode === 'alt') return;
+            if (explicitMode === 'alt') return;
             toast(voice ? '语音引擎配置无效，请重新选择' : '请先为「' + speech.name + '」配置语音引擎和音色', true);
             return;
         }
         const key = speechKey(speech);
+        const voiceMode = explicitMode || 'auto';
         const existing = findQueueEntry(key);
-        if (existing && existing.voiceMode === voiceMode && !force) { cancelEntry(existing); return; }
+        // 单击（默认判定）再点同一条目 = 取消；双击只保证「这一段用第二音色」，不负责取消
+        if (existing && !explicitMode && !force) { cancelEntry(existing); return; }
+        if (existing && explicitMode && explicitMode === existing.voiceMode && !force) return;   // 已经在用这套音色了
         if (existing) {
-            // 同一条目但换音色 / 强制重生成：原地替换（保住它在队列里的位置）
+            // 换音色 / 强制重生成：原地替换（保住它在队列里的位置）
             const index = audioQueue.indexOf(existing);
             disposeEntry(existing);
             const replaced = createAudioEntry(speech, key, voiceMode, avatar, force);
             audioQueue.splice(index, 1, replaced);
             dbg('替换队列条目（' + voiceMode + '，位置 ' + index + '）');
-            synthesizeEntry(replaced, speech, picked);
+            synthesizeEntry(replaced, speech, voice);
             pumpQueue();
             return;
         }
@@ -1333,43 +1351,65 @@
         const entry = createAudioEntry(speech, key, voiceMode, avatar, force);
         audioQueue.push(entry);
         dbg('语音入队（' + voiceMode + '，队列 ' + audioQueue.length + ' 条）');
-        synthesizeEntry(entry, speech, picked);
+        synthesizeEntry(entry, speech, voice);
         pumpQueue();
     }
 
-    /** 合成一条目：成功后转 ready 交回队列推进，失败只移除自己并提示（被取消的不提示） */
+    /**
+     * 合成一条目：voiceMode 为 'auto' 时先按缓存优先级定下这次用哪套音色，再取缓存或合成；
+     * 成功后转 ready 交回队列推进，失败只移除自己并提示（被取消的不提示）。
+     */
     function synthesizeEntry(entry, speech, voice) {
-        const request = buildSpeechRequest(speech, voice);
-        const abort = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
-        if (abort) request.signal = abort.signal;
-        entry.abort = abort;
         const gone = function () { return audioQueue.indexOf(entry) === -1; };
-        getOrCreateAudio(speech.text, request, { force: entry.force }).then(function (result) {
-            if (gone()) return;   // 已被取消或替换：不落地、不出声、不提示
-            entry.phase = 'ready';
-            entry.blob = result.blob;
-            entry.mime = result.mime || '';
-            entry.abort = null;
-            // 用上了第二音色：把这一段第一音色的旧缓存清掉（含缓存命中的情形），免得那版被淘汰的音频再冒出来
-            if (entry.voiceMode === 'alt') dropPrimaryVoiceCache(speech, voice);
-            // 强制重生成时明确回报结果，便于确认「这次真的重新请求了」而不是回放缓存
-            if (entry.force) {
-                const queued = audioQueue[0] !== entry;
-                toast((result.cached ? '重新生成命中了缓存（未重新请求）' : '已重新生成（本次未使用缓存）') + (queued ? '，已加入播放队列' : ''), !!result.cached);
-            }
-            pumpQueue();
-        }).catch(function (error) {
-            if (gone()) {
-                // 已被取消或被替换：错误不再无声消失，进排障日志备查
-                dbg('被取消的合成请求结束（不提示用户）：' + String((error && error.message) || error || '未知错误'));
+        const run = function (mode) {
+            entry.voiceMode = mode;
+            const picked = pickVoice(voice, mode);
+            if (!picked) {
+                // 判定期间配置被清空/改坏（极罕见）：移除条目，别留一个永远转圈的空壳
+                audioQueue.splice(audioQueue.indexOf(entry), 1);
+                disposeEntry(entry);
+                dbg('音色不可用，放弃该条目：' + mode);
+                pumpQueue();
                 return;
             }
-            audioQueue.splice(audioQueue.indexOf(entry), 1);
-            disposeEntry(entry);
-            const detail = String((error && error.message) || error || '未知错误');
-            toast('语音生成失败：' + (isFetchBlocked(error) ? '网络请求被拦截（CORS 或网络不通），请检查网络或代理设置' : detail) + '（可重试）', true);
-            pumpQueue();
-        });
+            const request = buildSpeechRequest(speech, picked);
+            const abort = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
+            if (abort) request.signal = abort.signal;
+            entry.abort = abort;
+            getOrCreateAudio(speech.text, request, { force: entry.force }).then(function (result) {
+                if (gone()) return;   // 已被取消或替换：不落地、不出声、不提示
+                entry.phase = 'ready';
+                entry.blob = result.blob;
+                entry.mime = result.mime || '';
+                entry.abort = null;
+                // 强制重生成时明确回报结果，便于确认「这次真的重新请求了」而不是回放缓存
+                if (entry.force) {
+                    const queued = audioQueue[0] !== entry;
+                    toast((result.cached ? '重新生成命中了缓存（未重新请求）' : '已重新生成（本次未使用缓存）') + (queued ? '，已加入播放队列' : ''), !!result.cached);
+                }
+                pumpQueue();
+            }).catch(function (error) {
+                if (gone()) {
+                    // 已被取消或被替换：错误不再无声消失，进排障日志备查
+                    dbg('被取消的合成请求结束（不提示用户）：' + String((error && error.message) || error || '未知错误'));
+                    return;
+                }
+                audioQueue.splice(audioQueue.indexOf(entry), 1);
+                disposeEntry(entry);
+                const detail = String((error && error.message) || error || '未知错误');
+                toast('语音生成失败：' + (isFetchBlocked(error) ? '网络请求被拦截（CORS 或网络不通），请检查网络或代理设置' : detail) + '（可重试）', true);
+                pumpQueue();
+            });
+        };
+        if (entry.voiceMode === 'auto') {
+            resolvePreferredVoiceMode(speech, voice).then(function (mode) {
+                if (gone()) return;
+                dbg('默认音色判定 → ' + mode + '：' + String(speech.text).slice(0, 12));
+                run(mode);
+            });
+            return;
+        }
+        run(entry.voiceMode);
     }
 
     /** 队列推进：队首就绪就播，队首还在合成则等它自己的回调再推进（后面的不抢播） */
@@ -1479,10 +1519,11 @@
         if (!speech) { toast('这一段没有可朗读的对白（需要成对的引号）', true); return; }
         const voice = getVoiceConfig(speech.name);
         if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
-        // 重生成沿用这一条当前用的那套音色：第二音色在播时不该被悄悄换回第一音色
+        // 重生成沿用这一条当前用的那套音色（第二音色在播时不该被悄悄换回第一音色）；
+        // 队列里没有它时按默认判定来（第二音色缓存优先），与单击保持一致
         const existing = findQueueEntry(speechKey(speech));
-        const voiceMode = existing ? existing.voiceMode : 'primary';
-        if (!pickVoice(voice, voiceMode)) { toast('语音引擎配置无效，请重新选择', true); return; }
+        const voiceMode = existing ? existing.voiceMode : 'auto';
+        if (!canUseVoice(voice, voiceMode)) { toast('语音引擎配置无效，请重新选择', true); return; }
         toast('正在强制重新生成这一段…');
         enqueueAvatarSpeech(avatar, { force: true, voiceMode: voiceMode });
     }

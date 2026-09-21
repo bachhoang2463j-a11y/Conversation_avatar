@@ -2725,47 +2725,54 @@ test('M10-41 楼层重渲染后，播放/排队状态仍按角色+文本恢复�
   });
 });
 
-test('M10-42 用过第二音色后，该段第一音色的旧缓存被清掉（再单击会重新合成）', function () {
+test('M10-42 第二音色缓存优先：生成过第二音色后，单击直接播它（不再回到第一音色）', function () {
   __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
   window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: true }, doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
   window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', alt: { engine: 'doubao', voiceId: 'zh_male_dayi_saturn_bigtts' } });
-  var mes = __addFloor('<p>{弗兰克(微笑)}“淘汰缓存用例。”</p>', false);
+  var mes = __addFloor('<p>{弗兰克(微笑)}“音色优先级用例。”</p>', false);
   window.EmoAvatar.scanAll();
   var btn = __buttons(mes)[0];
-  var countEdge = function (records) { return records.filter(function (r) { return r.engine === 'edge'; }).length; };
+  var countEngine = function (records, engine) { return records.filter(function (r) { return r.engine === engine; }).length; };
   return window.EmoAvatar.clearTtsCache().then(function () {
     window.EmoAvatar.clearTtsMemory();
-    __tap(btn);                           // 第一音色：合成并落盘
+    __tap(btn);                           // 还没有第二音色缓存：仍走第一音色
     return __wait(220);
   }).then(function () {
-    assert(__countTtsCalls('edge') === 1, '第一音色应先合成一次，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(__countTtsCalls('edge') === 1, '首次单击应走第一音色，实际 ' + __countTtsCalls('edge') + ' 次');
     assert(window.__audioPlayCount === 1, '第一音色应正常播放，实际 ' + window.__audioPlayCount + ' 次');
-    return window.EmoAvatar.getTtsCache();
-  }).then(function (records) {
-    assert(countEdge(records) === 1, '第一音色应已落盘 1 条，实际 ' + countEdge(records) + ' 条');
     window.__lastAudio.onended();
     return __wait(500);
   }).then(function () {
-    __doubleTap(btn);                     // 双击切第二音色
+    __doubleTap(btn);                     // 双击：生成第二音色
     return __wait(320);
   }).then(function () {
-    assert(__countTtsCalls('doubao') === 1, '第二音色应合成一次，实际 ' + __countTtsCalls('doubao') + ' 次');
+    assert(__countTtsCalls('doubao') === 1, '双击应用第二音色合成，实际 ' + __countTtsCalls('doubao') + ' 次');
     assert(window.__audioPlayCount === 2, '第二音色应接着播，实际 ' + window.__audioPlayCount + ' 次');
-    return window.EmoAvatar.getTtsCache();
-  }).then(function (records) {
-    assert(countEdge(records) === 0, '用过第二音色后，该段第一音色的持久化缓存应被清掉，实际还剩 ' + countEdge(records) + ' 条');
-    assert(records.filter(function (r) { return r.engine === 'doubao'; }).length === 1, '第二音色自己的缓存不该被删');
     window.__lastAudio.onended();
     return __wait(500);
   }).then(function () {
-    __tap(btn);                           // 再单击：旧缓存已清，应重新合成第一音色
+    __tap(btn);                           // 关键：第二音色已有缓存，单击应直接播它
     return __wait(220);
   }).then(function () {
-    assert(__countTtsCalls('edge') === 2, '单击应重新合成第一音色（旧缓存已被清），实际 ' + __countTtsCalls('edge') + ' 次');
-    assert(window.__audioPlayCount === 3, '重新合成的一版应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(__countTtsCalls('doubao') === 1, '单击应命中第二音色缓存、不再合成，实际 ' + __countTtsCalls('doubao') + ' 次');
+    assert(__countTtsCalls('edge') === 1, '单击不该再回头用第一音色，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 3, '第二音色缓存应被直接播放，实际 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-playing'), '应处于播放态：' + btn.className);
     return window.EmoAvatar.getTtsCache();
   }).then(function (records) {
-    assert(countEdge(records) === 1, '重新合成的一版应重新落盘，实际 ' + countEdge(records) + ' 条');
+    assert(countEngine(records, 'edge') === 1 && countEngine(records, 'doubao') === 1,
+      '两套音色的缓存都该留着（只比优先级、不删缓存）：edge ' + countEngine(records, 'edge') + ' / doubao ' + countEngine(records, 'doubao'));
+    window.__lastAudio.onended();
+    __clearToasts();
+    return __wait(500);
+  }).then(function () {
+    return __longPress(btn, 700);         // 长按重生成：应重生成「当前在用」的第二音色，而不是悄悄回到第一音色
+  }).then(function () {
+    return __wait(340);
+  }).then(function () {
+    assert(__countTtsCalls('doubao') === 2, '长按应重生成第二音色，实际豆包 ' + __countTtsCalls('doubao') + ' 次');
+    assert(__countTtsCalls('edge') === 1, '长按不该回头合成第一音色，实际 edge ' + __countTtsCalls('edge') + ' 次');
+    assert(__toasts().indexOf('已重新生成') !== -1, '应回报重生成结果：' + __toasts());
   });
 });
 
@@ -2821,6 +2828,9 @@ __btn('清空头像素材库', async function () {
 
 /* ---------- 用例运行器（支持异步用例） ---------- */
 document.getElementById('run-tests').onclick = function () {
+  // 每一轮开跑前把「音频设置」恢复出厂默认：持久化开关/代理会写进 localStorage，
+  // 上一轮改动（如 M10-42 打开 Edge 持久化、M10-25 关掉 MiMo 持久化）残留会让 M10-0 的默认值断言随机失败
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: '', persist: false }, minimax: { persist: true }, doubao: { persist: true }, mimo: { persist: true } });
   var box = document.getElementById('cases');
   box.innerHTML = '';
   var pass = 0, fail = 0;
