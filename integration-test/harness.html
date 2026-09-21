@@ -180,6 +180,14 @@ window.fetch = function (url, options) {
       text: function () { return Promise.resolve('{"code":0,"data":"' + b64 + '"}\n{"code":20000000}\n'); },
     });
   }
+  if (u.indexOf('/chat/completions') !== -1) {
+    var b64m = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
+    return Promise.resolve({
+      ok: true, status: 200,
+      headers: { get: function () { return 'application/json'; } },
+      json: function () { return Promise.resolve({ choices: [{ finish_reason: 'stop', message: { audio: { data: b64m, format: 'wav' } } }] }); },
+    });
+  }
   return Promise.resolve({
     ok: true, status: 200,
     headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? 'audio/mpeg' : null; } },
@@ -207,6 +215,7 @@ function __lastTtsCall(kind) {
     if (kind === 'edge' && u.indexOf('/tts?') !== -1) return window.__fetchCalls[i];
     if (kind === 'minimax' && u.indexOf('/t2a_v2') !== -1) return window.__fetchCalls[i];
     if (kind === 'doubao' && u.indexOf('openspeech.bytedance.com') !== -1) return window.__fetchCalls[i];
+    if (kind === 'mimo' && u.indexOf('/chat/completions') !== -1) return window.__fetchCalls[i];
   }
   return null;
 }
@@ -215,6 +224,7 @@ function __countTtsCalls(kind) {
     if (kind === 'edge') return c.url.indexOf('/tts?') !== -1;
     if (kind === 'minimax') return c.url.indexOf('/t2a_v2') !== -1;
     if (kind === 'doubao') return c.url.indexOf('openspeech.bytedance.com') !== -1;
+    if (kind === 'mimo') return c.url.indexOf('/chat/completions') !== -1;
     return false;
   }).length;
 }
@@ -254,7 +264,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.3.1', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.3.2', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1455,7 +1465,8 @@ test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', funct
   var cfg = api.getTtsConfig();
   assert(cfg.edge && typeof cfg.edge.proxyUrl === 'string', 'Edge 配置缺 proxyUrl');
   assert(cfg.edge.persist === false, 'Edge 默认不应持久化');
-  assert(cfg.minimax.persist === true && cfg.doubao.persist === true, 'MiniMax/豆包默认应持久化');
+  assert(cfg.minimax.persist === true && cfg.doubao.persist === true && cfg.mimo.persist === true, 'MiniMax/豆包/MiMo 默认应持久化');
+  assert(cfg.mimo && cfg.mimo.baseUrl === 'https://api.xiaomimimo.com/v1', 'MiMo 默认 Base URL 不符：' + JSON.stringify(cfg.mimo));
   assert(cfg.cacheDays === 30 && cfg.cacheMaxEntries === 200 && cfg.cacheMaxMb === 512, '缓存默认值与约定不符');
 });
 test('M10-1 引号提取：五种双引号、单引号只作嵌套、旁白不进请求', function () {
@@ -1735,6 +1746,118 @@ test('M10-14 代理全部不可用时给中文可操作提示，而非浏览器�
     assert(!btn.classList.contains('eca-audio-loading'), '失败后按钮应复位');
     window.__failHosts = [];
     return window.EmoAvatar.pingEdgeServers(true).then(function () { });
+  });
+});
+
+test('M10-15 播放结束后按钮回到待播放态（期间按钮被重扫重建）', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  var mes = __addFloor('<p>{弗兰克(默认)}“回位测试。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  assert(!!btn, '应渲染语音按钮');
+  btn.click();
+  return __wait(150).then(function () {
+    assert(btn.classList.contains('eca-audio-playing') && btn.textContent === '■', '合成后应进入播放态，实际 ' + btn.className + ' / ' + btn.textContent);
+    // 播放期间聊天区任何 DOM 变化都会触发重扫，按钮被整批重建
+    window.EmoAvatar.refreshAudioButtons();
+    var live = __buttons(mes)[0];
+    assert(live && live !== btn, '重扫后按钮应是新节点');
+    assert(live.classList.contains('eca-audio-playing'), '新按钮应沿用播放态');
+    window.__lastAudio.onended();
+    assert(!live.classList.contains('eca-audio-playing') && !live.classList.contains('eca-audio-loading'), '播放结束后可见按钮应退出播放态，实际 ' + live.className);
+    assert(live.textContent === '🔊', '播放结束后应回到待播放图标，实际 ' + live.textContent);
+  });
+});
+
+test('M10-16 MiMo：请求体结构、鉴权头与 base64 音频解析', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ mimo: { apiKey: 'test-key', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav' } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'mimo', voiceId: '冰糖' });
+  var mes = __addFloor('<p>{弗兰克(愤怒)}“MiMo 测试。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  assert(!!btn, '应渲染语音按钮');
+  btn.click();
+  return __wait(180).then(function () {
+    var call = __lastTtsCall('mimo');
+    assert(call, '应请求 MiMo /chat/completions');
+    assert(call.url.indexOf('/chat/completions') !== -1, 'URL 应指向 /chat/completions，实际 ' + call.url);
+    assert(call.method === 'POST', 'MiMo 应为 POST，实际 ' + call.method);
+    assert(call.headers['api-key'] === 'test-key' && call.headers['Authorization'] === 'Bearer test-key', '鉴权头不正确：' + JSON.stringify(call.headers));
+    assert(call.body && call.body.model === 'mimo-v2.5-tts', 'model 字段不正确：' + JSON.stringify(call.body && call.body.model));
+    assert(call.body.audio && call.body.audio.voice === '冰糖' && call.body.audio.format === 'wav', 'audio 字段不正确：' + JSON.stringify(call.body.audio));
+    assert(call.body.messages.length === 2, '有情绪时应含 user 指令 + assistant 正文，实际 ' + JSON.stringify(call.body.messages));
+    assert(call.body.messages[0].role === 'user' && call.body.messages[0].content.indexOf('愤怒') !== -1, '情绪应作为 user 指令：' + JSON.stringify(call.body.messages[0]));
+    assert(call.body.messages[1].role === 'assistant' && call.body.messages[1].content === 'MiMo 测试。', 'assistant 应为待合成正文：' + JSON.stringify(call.body.messages[1]));
+    assert(window.__audioPlayCount === 1, '应正常播放 MiMo 返回的音频，实际播放 ' + window.__audioPlayCount + ' 次');
+  });
+});
+
+test('M10-17 底栏关键入口不溢出面板（音频设置 / 语音缓存可见可点）', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  __seedM1();
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  return __wait(80).then(function () {
+    var modal = panel.querySelector('.eca-modal');
+    assert(modal, '面板结构缺失');
+    var mr = modal.getBoundingClientRect();
+    ['eca-tts-settings-btn', 'eca-cache-btn', 'eca-tts-enabled'].forEach(function (id) {
+      var el = panel.querySelector('#' + id);
+      assert(el, '底栏缺少 ' + id);
+      var r = el.getBoundingClientRect();
+      assert(r.width > 0 && r.height > 0, id + ' 尺寸为 0，不可见');
+      assert(r.right <= mr.right + 1, id + ' 溢出面板右边界（' + Math.round(r.right) + ' > ' + Math.round(mr.right) + '）');
+      assert(r.bottom <= mr.bottom + 1, id + ' 溢出面板下边界（' + Math.round(r.bottom) + ' > ' + Math.round(mr.bottom) + '）');
+    });
+    panel.querySelector('#eca-tts-settings-btn').click();
+    var dlg = document.getElementById('eca-audio-settings');
+    assert(dlg && dlg.style.display === 'flex', '「音频设置」弹窗未打开');
+    assert(dlg.querySelector('#eca-mimo-key'), '音频设置缺少 MiMo API Key 输入框');
+    assert(dlg.querySelector('#eca-db-app'), '音频设置缺少豆包 App ID 输入框');
+    assert(dlg.querySelector('#eca-mm-key'), '音频设置缺少 MiniMax API Key 输入框');
+    dlg.querySelector('[data-audio-close]').click();
+    panel.querySelector('#eca-cache-btn').click();
+    var cache = document.getElementById('eca-cache-panel');
+    assert(cache && cache.style.display === 'flex', '「语音缓存」弹窗未打开');
+    cache.querySelector('[data-audio-close]').click();
+    panel.querySelector('.eca-close').click();
+  });
+});
+
+test('M10-18 语音设置：引擎含 MiMo、Edge 音色按语言分组且含云夏', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克']);
+  __seedM1();
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  return __wait(80).then(function () {
+    var row = panel.querySelector('#eca-char-list .eca-char-item');
+    assert(row, '角色列表为空');
+    row.click();
+    var vbtn = panel.querySelector('#eca-voice-btn');
+    assert(vbtn, '角色详情缺少「语音设置」按钮');
+    vbtn.click();
+    var vdlg = document.getElementById('eca-voice-settings');
+    assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
+    var engines = Array.prototype.map.call(vdlg.querySelectorAll('#eca-voice-engine option'), function (o) { return o.value; });
+    ['edge', 'minimax', 'doubao', 'mimo'].forEach(function (e) { assert(engines.indexOf(e) !== -1, '引擎下拉缺少 ' + e + '：' + engines.join(',')); });
+    var groups = vdlg.querySelectorAll('#eca-edge-voice optgroup');
+    assert(groups.length >= 5, 'Edge 音色应按语言分组，实际 ' + groups.length + ' 组');
+    var edgeOptions = vdlg.querySelectorAll('#eca-edge-voice option');
+    assert(edgeOptions.length >= 30, 'Edge 音色数量不足，实际 ' + edgeOptions.length);
+    var hasYunxia = Array.prototype.some.call(edgeOptions, function (o) { return o.value === 'zh-CN-YunxiaNeural'; });
+    assert(hasYunxia, 'Edge 音色缺少云夏（儿童）zh-CN-YunxiaNeural');
+    var mimoSel = vdlg.querySelector('#eca-mimo-voice');
+    var mimoOptions = vdlg.querySelectorAll('#eca-mimo-voice option');
+    assert(mimoOptions.length >= 9, 'MiMo 预置音色不足，实际 ' + mimoOptions.length);
+    var engineSel = vdlg.querySelector('#eca-voice-engine');
+    engineSel.value = 'mimo';
+    engineSel.dispatchEvent(new Event('change', { bubbles: true }));
+    assert(vdlg.querySelector('#eca-voice-id').value === mimoSel.value, '切到 MiMo 后音色 ID 应同步为所选 MiMo 音色，实际 ' + vdlg.querySelector('#eca-voice-id').value);
+    vdlg.querySelector('[data-audio-close]').click();
+    panel.querySelector('.eca-close').click();
   });
 });
 

@@ -15,7 +15,7 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.3.1';
+    const VERSION = '0.3.2';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
@@ -42,15 +42,57 @@
     const TAG_RE = /\{([^{}()]{1,30})\(([^{}()]{1,8})\)\}/g;
     /** 头像显示高度默认值（em），面板可调 */
     const DEFAULT_SIZE = 2.5;
-    const TTS_ENGINES = ['edge', 'minimax', 'doubao'];
+    const TTS_ENGINES = ['edge', 'minimax', 'doubao', 'mimo'];
     const EDGE_VOICES = [
-        { id: 'zh-CN-XiaoxiaoNeural', name: '晓晓（女）', styles: ['general', 'affectionate', 'angry', 'assistant', 'calm', 'cheerful', 'chat', 'customerservice', 'depressed', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'newscast', 'poetry-reading', 'sad', 'shouting'] },
-        { id: 'zh-CN-YunxiNeural', name: '云希（男）', styles: ['general', 'angry', 'assistant', 'calm', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'narration-relaxed', 'sad', 'serious', 'shouting'] },
-        { id: 'zh-CN-YunjianNeural', name: '云健（男）', styles: ['general', 'angry', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'sad', 'serious', 'shouting'] },
-        { id: 'zh-CN-XiaoyiNeural', name: '晓伊（女）', styles: ['general', 'affectionate', 'angry', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'gentle', 'sad', 'serious', 'shouting'] },
-        { id: 'zh-CN-liaoning-XiaobeiNeural', name: '晓北（女）', styles: ['general', 'angry', 'cheerful', 'sad'] },
-        { id: 'zh-CN-shaanxi-XiaoniNeural', name: '晓妮（女）', styles: ['general', 'angry', 'cheerful', 'sad'] },
+        { id: 'zh-CN-XiaoxiaoNeural', name: '晓晓（女）', lang: '中文（普通话）', styles: ['general', 'assistant', 'chat', 'customerservice', 'newscast', 'affectionate', 'angry', 'calm', 'cheerful', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'sad', 'serious', 'poetry-reading'] },
+        { id: 'zh-CN-XiaoyiNeural', name: '晓伊（女）', lang: '中文（普通话）', styles: ['general', 'angry', 'disgruntled', 'affectionate', 'cheerful', 'fearful', 'gentle', 'sad', 'serious'] },
+        { id: 'zh-CN-XiaochenNeural', name: '晓辰（女）', lang: '中文（普通话）', styles: ['general', 'livecommercial'] },
+        { id: 'zh-CN-XiaohanNeural', name: '晓涵（女）', lang: '中文（普通话）', styles: ['general', 'calm', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'sad', 'gentle', 'affectionate', 'embarrassed'] },
+        { id: 'zh-CN-XiaomengNeural', name: '晓梦（女）', lang: '中文（普通话）', styles: ['general', 'chat'] },
+        { id: 'zh-CN-XiaomoNeural', name: '晓墨（女）', lang: '中文（普通话）', styles: ['general', 'embarrassed', 'calm', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'sad', 'depressed', 'affectionate', 'gentle', 'envious'] },
+        { id: 'zh-CN-XiaoqiuNeural', name: '晓秋（女）', lang: '中文（普通话）', styles: ['general'] },
+        { id: 'zh-CN-XiaoruiNeural', name: '晓睿（女）', lang: '中文（普通话）', styles: ['general', 'calm', 'fearful', 'angry', 'sad'] },
+        { id: 'zh-CN-XiaoshuangNeural', name: '晓双（儿童·女）', lang: '中文（普通话）', styles: ['general', 'chat'] },
+        { id: 'zh-CN-XiaoxuanNeural', name: '晓萱（女）', lang: '中文（普通话）', styles: ['general', 'calm', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'gentle', 'depressed'] },
+        { id: 'zh-CN-XiaoyanNeural', name: '晓颜（女）', lang: '中文（普通话）', styles: ['general'] },
+        { id: 'zh-CN-XiaozhenNeural', name: '晓甄（女）', lang: '中文（普通话）', styles: ['general', 'angry', 'disgruntled', 'cheerful', 'fearful', 'sad', 'serious'] },
+        { id: 'zh-CN-YunxiNeural', name: '云希（男）', lang: '中文（普通话）', styles: ['general', 'narration-relaxed', 'embarrassed', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'sad', 'depressed', 'chat', 'assistant', 'newscast'] },
+        { id: 'zh-CN-YunjianNeural', name: '云健（男）', lang: '中文（普通话）', styles: ['general', 'narration-relaxed', 'sports-commentary', 'sports-commentary-excited'] },
+        { id: 'zh-CN-YunyangNeural', name: '云扬（男）', lang: '中文（普通话）', styles: ['general', 'customerservice', 'narration-professional', 'newscast-casual'] },
+        { id: 'zh-CN-YunyeNeural', name: '云野（男）', lang: '中文（普通话）', styles: ['general', 'embarrassed', 'calm', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'sad'] },
+        { id: 'zh-CN-YunzeNeural', name: '云泽（男）', lang: '中文（普通话）', styles: ['general', 'calm', 'fearful', 'cheerful', 'disgruntled', 'serious', 'angry', 'sad', 'depressed', 'documentary-narration'] },
+        { id: 'zh-CN-YunhaoNeural', name: '云皓（男）', lang: '中文（普通话）', styles: ['general', 'advertisement-upbeat'] },
+        { id: 'zh-CN-YunfengNeural', name: '云枫（男）', lang: '中文（普通话）', styles: ['general', 'angry', 'disgruntled', 'cheerful', 'fearful', 'sad', 'serious'] },
+        { id: 'zh-CN-YunxiaNeural', name: '云夏（儿童·男）', lang: '中文（普通话）', styles: ['general'] },
+        { id: 'zh-CN-liaoning-XiaobeiNeural', name: '晓北（东北话·女）', lang: '中文（方言）', styles: ['general', 'angry', 'cheerful', 'sad'] },
+        { id: 'zh-CN-shaanxi-XiaoniNeural', name: '晓妮（陕西话·女）', lang: '中文（方言）', styles: ['general', 'angry', 'cheerful', 'sad'] },
+        { id: 'zh-TW-HsiaoChenNeural', name: '曉臻（女）', lang: '中文（台湾）', styles: ['general'] },
+        { id: 'zh-TW-HsiaoYuNeural', name: '曉雨（女）', lang: '中文（台湾）', styles: ['general'] },
+        { id: 'zh-TW-YunJheNeural', name: '雲哲（男）', lang: '中文（台湾）', styles: ['general'] },
+        { id: 'zh-HK-HiuGaaiNeural', name: '曉佳（女）', lang: '粤语', styles: ['general'] },
+        { id: 'zh-HK-HiuMaanNeural', name: '曉曼（女）', lang: '粤语', styles: ['general'] },
+        { id: 'zh-HK-WanLungNeural', name: '雲龍（男）', lang: '粤语', styles: ['general'] },
+        { id: 'en-US-JennyNeural', name: 'Jenny', lang: '英语', styles: ['general', 'assistant', 'chat', 'customerservice', 'newscast', 'angry', 'cheerful', 'sad', 'excited', 'friendly', 'terrified', 'shouting', 'unfriendly', 'whispering', 'hopeful'] },
+        { id: 'en-US-GuyNeural', name: 'Guy', lang: '英语', styles: ['general', 'newscast', 'angry', 'cheerful', 'sad', 'excited', 'friendly', 'terrified', 'shouting', 'unfriendly', 'whispering', 'hopeful'] },
+        { id: 'en-US-AriaNeural', name: 'Aria', lang: '英语', styles: ['general', 'chat', 'customerservice', 'narration-professional', 'newscast-casual', 'newscast-formal', 'cheerful', 'empathetic', 'angry', 'sad', 'excited', 'friendly', 'terrified', 'shouting', 'unfriendly', 'whispering', 'hopeful'] },
+        { id: 'ja-JP-NanamiNeural', name: '七海（女）', lang: '日语', styles: ['general', 'chat', 'customerservice', 'cheerful'] },
+        { id: 'ja-JP-KeitaNeural', name: '圭太（男）', lang: '日语', styles: ['general'] },
+        { id: 'ko-KR-SunHiNeural', name: 'SunHi（女）', lang: '韩语', styles: ['general', 'cheerful'] },
+        { id: 'ko-KR-InJoonNeural', name: 'InJoon（男）', lang: '韩语', styles: ['general'] },
     ];
+    /** MiMo（小米）预置音色：voice 字段直接透传给接口 */
+    const MIMO_VOICES = [
+        { id: 'mimo_default', name: 'MiMo · 默认' },
+        { id: '冰糖', name: '冰糖（中文女）' },
+        { id: '茉莉', name: '茉莉（中文女）' },
+        { id: '苏打', name: '苏打（中文男）' },
+        { id: '白桦', name: '白桦（中文男）' },
+        { id: 'Mia', name: 'Mia（英文女）' },
+        { id: 'Chloe', name: 'Chloe（英文女）' },
+        { id: 'Milo', name: 'Milo（英文男）' },
+        { id: 'Dean', name: 'Dean（英文男）' },
+    ];
+    const MIMO_FORMATS = ['wav', 'mp3'];
     const EDGE_EMOTION_STYLES = {
         '默认': 'general', '微笑': 'cheerful', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'cheerful',
         '轻蔑': 'disgruntled', '杀意': 'serious', '思考': 'calm', '大笑': 'cheerful', '害羞': 'affectionate',
@@ -87,6 +129,7 @@
         edge: { proxyUrl: '', rate: 0, pitch: 0, volume: 100, persist: false },
         minimax: { apiKey: '', platform: 'cn', model: 'speech-2.8-hd', sampleRate: 32000, persist: true },
         doubao: { appId: '', accessKey: '', uid: '1222356', sampleRate: 24000, persist: true },
+        mimo: { apiKey: '', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts', format: 'wav', persist: true },
         cacheDays: 30, cacheMaxEntries: 200, cacheMaxMb: 512,
     };
     let voiceMap = {};
@@ -256,7 +299,7 @@
     function mergeTtsConfig(stored) {
         const next = JSON.parse(JSON.stringify(DEFAULT_TTS_CONFIG));
         if (!stored || typeof stored !== 'object') return next;
-        ['edge', 'minimax', 'doubao'].forEach(function (engine) {
+        ['edge', 'minimax', 'doubao', 'mimo'].forEach(function (engine) {
             if (stored[engine] && typeof stored[engine] === 'object') Object.assign(next[engine], stored[engine]);
         });
         ['cacheDays', 'cacheMaxEntries', 'cacheMaxMb'].forEach(function (key) {
@@ -612,10 +655,47 @@
         });
     }
 
+    /** MiMo（小米）走 OpenAI 风格 /chat/completions，音频以 base64 放在 choices[0].message.audio */
+    function synthesizeMimo(text, request) {
+        const cfg = ttsConfig.mimo;
+        const key = String(cfg.apiKey || '').split(/[\n,，]+/).map(function (x) { return x.trim(); }).filter(Boolean)[0] || '';
+        if (!key) return Promise.reject(new Error('MiMo API Key 未配置'));
+        const format = MIMO_FORMATS.indexOf(cfg.format) === -1 ? 'wav' : cfg.format;
+        const base = String(cfg.baseUrl || 'https://api.xiaomimimo.com/v1').trim().replace(/\/+$/, '');
+        const messages = [];
+        if (request.contextText) messages.push({ role: 'user', content: request.contextText });
+        messages.push({ role: 'assistant', content: text });
+        const body = {
+            model: cfg.model || 'mimo-v2.5-tts',
+            messages: messages,
+            audio: { format: format, voice: String(request.voiceId || 'mimo_default').trim() || 'mimo_default' },
+        };
+        return fetchWithTimeout(base + '/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'api-key': key, Authorization: 'Bearer ' + key },
+            body: JSON.stringify(body),
+        }, 30000).then(function (response) {
+            if (!response.ok) throw new Error('MiMo HTTP ' + response.status);
+            return response.json();
+        }).then(function (data) {
+            const choice = data && data.choices && data.choices[0];
+            const message = choice && choice.message;
+            if (String(choice && choice.finish_reason || '') === 'content_filter') {
+                throw new Error('MiMo 内容过滤拦截：' + String(message && message.content || '').slice(0, 120));
+            }
+            if (!message || !message.audio || !message.audio.data) {
+                throw new Error((data && data.error && data.error.message) || 'MiMo 未返回音频数据');
+            }
+            const mime = format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+            return { blob: new Blob([base64ToBytes(message.audio.data)], { type: mime }), mime: mime };
+        });
+    }
+
     function synthesizeTts(text, request) {
         if (request.engine === 'edge') return synthesizeEdge(text, request);
         if (request.engine === 'minimax') return synthesizeMinimax(text, request);
         if (request.engine === 'doubao') return synthesizeDoubao(text, request);
+        if (request.engine === 'mimo') return synthesizeMimo(text, request);
         return Promise.reject(new Error('未知语音引擎'));
     }
 
@@ -773,6 +853,17 @@
         return { text: quotes.join('\n'), emotion: avatar.dataset.ecaEmotion || '默认', name: avatar.dataset.ecaName || '' };
     }
 
+    function resetAudioButton(button) {
+        if (!button) return;
+        button.classList.remove('eca-audio-loading', 'eca-audio-playing');
+        button.textContent = '🔊';
+    }
+
+    /** 每次重扫都会把按钮整批重建，播放结束必须复位文档里所有按钮；只复位点击时那个节点会漏掉重建后的新节点 */
+    function resetAllAudioButtons() {
+        doc.querySelectorAll('.eca-audio-btn').forEach(resetAudioButton);
+    }
+
     function stopCurrentAudio() {
         if (currentAudio) {
             try { currentAudio.pause(); } catch (e) { /* 已停止 */ }
@@ -782,10 +873,8 @@
         if (currentAudioUrl) {
             try { topWindow.URL.revokeObjectURL(currentAudioUrl); } catch (e) { /* 已释放 */ }
         }
-        if (currentAudioButton) {
-            currentAudioButton.classList.remove('eca-audio-loading', 'eca-audio-playing');
-            currentAudioButton.textContent = '🔊';
-        }
+        if (currentAudioButton) resetAudioButton(currentAudioButton);
+        resetAllAudioButtons();
         currentAudio = null; currentAudioUrl = null; currentAudioButton = null;
         currentAudioState = null;
     }
@@ -1726,7 +1815,7 @@
         + '#eca-panel .eca-close,#eca-batch-panel .eca-close{background:none;border:1px solid transparent;color:#7d6b56;font-size:18px;cursor:pointer;line-height:1;padding:0 5px;border-radius:5px;transition:all .15s ease;}'
         + '#eca-panel .eca-close:hover,#eca-batch-panel .eca-close:hover{color:#943325;background:rgba(148,51,37,.1);border-color:rgba(148,51,37,.25);}'
         + '#eca-panel .eca-footer,#eca-batch-panel .eca-footer{display:flex;align-items:center;padding:8px 16px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);position:relative;z-index:2;font-size:13px;min-height:44px;box-sizing:border-box;}'
-        + '#eca-panel .eca-footer{justify-content:space-between;gap:12px;flex-wrap:nowrap;}'
+        + '#eca-panel .eca-footer{justify-content:space-between;gap:12px;flex-wrap:wrap;}'
         + '#eca-batch-panel .eca-footer{gap:16px;flex-wrap:wrap;padding:10px 18px;}'
         // 管理面板主体
         + '#eca-panel .eca-body{display:flex;min-height:360px;max-height:calc(100vh - 220px);max-height:calc(100dvh - 220px);overflow:hidden;position:relative;z-index:1;}'
@@ -1743,7 +1832,7 @@
         // 底栏双区布局与分割线
         + '#eca-panel .eca-footer-left{display:flex;align-items:center;gap:8px;flex:0 0 auto;}'
         + '#eca-panel .eca-footer-divider{width:1px;height:18px;background:#ded2bd;flex:0 0 auto;margin:0 2px;}'
-        + '#eca-panel .eca-footer-right{display:flex;align-items:center;gap:12px;flex:1 1 auto;justify-content:flex-end;white-space:nowrap;}'
+        + '#eca-panel .eca-footer-right{display:flex;align-items:center;gap:12px;flex:1 1 auto;justify-content:flex-end;white-space:nowrap;flex-wrap:wrap;}'
         + '#eca-panel .eca-add{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;text-shadow:0 1px 0 rgba(255,255,255,.7);user-select:none;white-space:nowrap;}'
         + '#eca-panel .eca-add.eca-add-char{background:linear-gradient(180deg,#fefaf0 0%,#ebe0c8 100%);border:1px solid #c3984d;color:#2b1f13;box-shadow:0 1px 3px rgba(110,75,30,.15),inset 0 1px 0 #fff;}'
         + '#eca-panel .eca-add.eca-add-char:hover{background:linear-gradient(180deg,#fffdf8 0%,#f4e8d0 100%);border-color:#9c7138;transform:translateY(-1px);box-shadow:0 2px 6px rgba(156,113,56,.25);}'
@@ -1913,21 +2002,49 @@
         return root;
     }
 
+    /** Edge 音色数量多，按语言分组展示 */
+    function edgeVoiceOptionsHtml(selectedId) {
+        const groups = [];
+        EDGE_VOICES.forEach(function (voice) {
+            const group = groups.filter(function (g) { return g.lang === voice.lang; })[0];
+            if (group) group.items.push(voice); else groups.push({ lang: voice.lang, items: [voice] });
+        });
+        return groups.map(function (group) {
+            return '<optgroup label="' + escapeHtml(group.lang) + '">' + group.items.map(function (voice) {
+                return '<option value="' + escapeHtml(voice.id) + '"' + (selectedId === voice.id ? ' selected' : '') + '>' + escapeHtml(voice.name + ' · ' + voice.id) + '</option>';
+            }).join('') + '</optgroup>';
+        }).join('');
+    }
+
+    function mimoVoiceOptionsHtml(selectedId) {
+        const preset = MIMO_VOICES.map(function (voice) {
+            return '<option value="' + escapeHtml(voice.id) + '"' + (selectedId === voice.id ? ' selected' : '') + '>' + escapeHtml(voice.name) + '</option>';
+        }).join('');
+        const known = MIMO_VOICES.some(function (voice) { return voice.id === selectedId; });
+        return known || !selectedId ? preset : preset + '<option value="' + escapeHtml(selectedId) + '" selected>' + escapeHtml(selectedId + '（自定义）') + '</option>';
+    }
+
     function openVoiceSettings(name) {
         if (!name) return;
         const current = getVoiceConfig(name) || { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', resourceId: '' };
-        const options = EDGE_VOICES.map(function (voice) { return '<option value="' + escapeHtml(voice.id) + '"' + (current.voiceId === voice.id ? ' selected' : '') + '>' + escapeHtml(voice.name + ' · ' + voice.id) + '</option>'; }).join('');
-        const body = '<div class="eca-audio-tip">别名会继承主角色的配置。Edge 可直接使用；MiniMax/豆包需要在音频设置中填写凭据。自定义情绪会按引擎能力降级或传入语音指令。</div>'
-            + '<div class="eca-audio-row"><label>引擎</label><select id="eca-voice-engine"><option value="edge"' + (current.engine === 'edge' ? ' selected' : '') + '>Edge（免费）</option><option value="minimax"' + (current.engine === 'minimax' ? ' selected' : '') + '>MiniMax</option><option value="doubao"' + (current.engine === 'doubao' ? ' selected' : '') + '>豆包</option></select></div>'
-            + '<div class="eca-audio-row"><label>Edge 音色</label><select id="eca-edge-voice">' + options + '</select></div>'
+        const body = '<div class="eca-audio-tip">别名会继承主角色的配置。Edge 可直接使用；MiniMax / 豆包 / MiMo 需要在音频设置中填写凭据。自定义情绪会按引擎能力降级或传入语音指令。</div>'
+            + '<div class="eca-audio-row"><label>引擎</label><select id="eca-voice-engine"><option value="edge"' + (current.engine === 'edge' ? ' selected' : '') + '>Edge（免费）</option><option value="minimax"' + (current.engine === 'minimax' ? ' selected' : '') + '>MiniMax</option><option value="doubao"' + (current.engine === 'doubao' ? ' selected' : '') + '>豆包</option><option value="mimo"' + (current.engine === 'mimo' ? ' selected' : '') + '>MiMo（小米）</option></select></div>'
+            + '<div class="eca-audio-row"><label>Edge 音色</label><select id="eca-edge-voice">' + edgeVoiceOptionsHtml(current.voiceId) + '</select></div>'
+            + '<div class="eca-audio-row"><label>MiMo 音色</label><select id="eca-mimo-voice">' + mimoVoiceOptionsHtml(current.voiceId) + '</select></div>'
             + '<div class="eca-audio-row"><label>音色 ID</label><input id="eca-voice-id" value="' + escapeHtml(current.voiceId || '') + '" placeholder="MiniMax voice_id / 豆包 speaker"></div>'
             + '<div class="eca-audio-row"><label>豆包 Resource ID</label><input id="eca-resource-id" value="' + escapeHtml(current.resourceId || '') + '" placeholder="如 seed-tts-2.0"></div>';
         const root = audioModal('eca-voice-settings', '语音设置 · ' + escapeHtml(name), body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-voice-save">保存</button>');
         const engine = root.querySelector('#eca-voice-engine');
         const edgeSelect = root.querySelector('#eca-edge-voice');
+        const mimoSelect = root.querySelector('#eca-mimo-voice');
         const voiceInput = root.querySelector('#eca-voice-id');
-        const syncVoiceUi = function () { edgeSelect.disabled = engine.value !== 'edge'; if (engine.value === 'edge') voiceInput.value = edgeSelect.value; };
-        edgeSelect.addEventListener('change', syncVoiceUi); engine.addEventListener('change', syncVoiceUi); syncVoiceUi();
+        const syncVoiceUi = function () {
+            edgeSelect.disabled = engine.value !== 'edge';
+            mimoSelect.disabled = engine.value !== 'mimo';
+            if (engine.value === 'edge') voiceInput.value = edgeSelect.value;
+            else if (engine.value === 'mimo') voiceInput.value = mimoSelect.value;
+        };
+        edgeSelect.addEventListener('change', syncVoiceUi); mimoSelect.addEventListener('change', syncVoiceUi); engine.addEventListener('change', syncVoiceUi); syncVoiceUi();
         root.querySelector('#eca-voice-save').addEventListener('click', function () {
             const value = { engine: engine.value, voiceId: String(voiceInput.value || '').trim(), resourceId: root.querySelector('#eca-resource-id').value.trim() };
             if (!value.voiceId || (value.engine === 'doubao' && !value.resourceId)) { toast('请填写音色 ID；豆包还需要 Resource ID', true); return; }
@@ -1948,6 +2065,7 @@
             + '<div class="eca-audio-section"><h4>Edge</h4><div class="eca-audio-tip">代理留空则由脚本自动探活择优、失败自动轮换；填入地址后固定只用该地址。</div><div class="eca-audio-row"><label>自定义代理</label><input id="eca-edge-proxy" value="' + escapeHtml(c.edge.proxyUrl) + '" placeholder="留空 = 自动选择可用代理"></div><div class="eca-audio-row"><label>代理状态</label><span class="eca-audio-tip" id="eca-edge-ping-status">' + escapeHtml(edgePingSummary()) + '</span><button type="button" id="eca-edge-ping">检测代理</button></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-edge-persist"' + (c.edge.persist ? ' checked' : '') + '><span>默认关闭（仅内存缓存）</span></div></div>'
             + '<div class="eca-audio-section"><h4>MiniMax</h4><div class="eca-audio-row"><label>API Key</label><input type="password" id="eca-mm-key" value="' + escapeHtml(c.minimax.apiKey) + '"></div><div class="eca-audio-row"><label>平台</label><select id="eca-mm-platform"><option value="cn"' + (c.minimax.platform === 'cn' ? ' selected' : '') + '>国内</option><option value="io"' + (c.minimax.platform === 'io' ? ' selected' : '') + '>国际</option></select></div><div class="eca-audio-row"><label>模型</label><input id="eca-mm-model" value="' + escapeHtml(c.minimax.model) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-mm-persist"' + (c.minimax.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
             + '<div class="eca-audio-section"><h4>豆包</h4><div class="eca-audio-row"><label>App ID</label><input id="eca-db-app" value="' + escapeHtml(c.doubao.appId) + '"></div><div class="eca-audio-row"><label>Access Key</label><input type="password" id="eca-db-key" value="' + escapeHtml(c.doubao.accessKey) + '"></div><div class="eca-audio-row"><label>UID</label><input id="eca-db-uid" value="' + escapeHtml(c.doubao.uid) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-db-persist"' + (c.doubao.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
+            + '<div class="eca-audio-section"><h4>MiMo（小米）</h4><div class="eca-audio-tip">在 api.xiaomimimo.com 申请 API Key；每个角色的音色在「语音设置」里选。</div><div class="eca-audio-row"><label>API Key</label><input type="password" id="eca-mimo-key" value="' + escapeHtml(c.mimo.apiKey) + '"></div><div class="eca-audio-row"><label>Base URL</label><input id="eca-mimo-base" value="' + escapeHtml(c.mimo.baseUrl) + '"></div><div class="eca-audio-row"><label>模型</label><input id="eca-mimo-model" value="' + escapeHtml(c.mimo.model) + '"></div><div class="eca-audio-row"><label>格式</label><select id="eca-mimo-format"><option value="wav"' + (c.mimo.format === 'wav' ? ' selected' : '') + '>wav</option><option value="mp3"' + (c.mimo.format === 'mp3' ? ' selected' : '') + '>mp3</option></select></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-mimo-persist"' + (c.mimo.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
             + '<div class="eca-audio-section"><h4>缓存清理</h4><div class="eca-audio-row"><label>保留天数</label><input type="number" id="eca-cache-days" min="1" value="' + c.cacheDays + '"><label>最大条数</label><input type="number" id="eca-cache-count" min="1" value="' + c.cacheMaxEntries + '"><label>最大 MB</label><input type="number" id="eca-cache-mb" min="1" value="' + c.cacheMaxMb + '"></div></div>';
         const root = audioModal('eca-audio-settings', '音频设置', body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-tts-save">保存</button>');
         const pingBtn = root.querySelector('#eca-edge-ping');
@@ -1963,6 +2081,7 @@
             c.edge.proxyUrl = root.querySelector('#eca-edge-proxy').value.trim(); c.edge.persist = root.querySelector('#eca-edge-persist').checked;
             c.minimax.apiKey = root.querySelector('#eca-mm-key').value.trim(); c.minimax.platform = root.querySelector('#eca-mm-platform').value; c.minimax.model = root.querySelector('#eca-mm-model').value.trim(); c.minimax.persist = root.querySelector('#eca-mm-persist').checked;
             c.doubao.appId = root.querySelector('#eca-db-app').value.trim(); c.doubao.accessKey = root.querySelector('#eca-db-key').value.trim(); c.doubao.uid = root.querySelector('#eca-db-uid').value.trim(); c.doubao.persist = root.querySelector('#eca-db-persist').checked;
+            c.mimo.apiKey = root.querySelector('#eca-mimo-key').value.trim(); c.mimo.baseUrl = root.querySelector('#eca-mimo-base').value.trim() || 'https://api.xiaomimimo.com/v1'; c.mimo.model = root.querySelector('#eca-mimo-model').value.trim() || 'mimo-v2.5-tts'; c.mimo.format = root.querySelector('#eca-mimo-format').value; c.mimo.persist = root.querySelector('#eca-mimo-persist').checked;
             c.cacheDays = Math.max(1, Number(root.querySelector('#eca-cache-days').value) || 30); c.cacheMaxEntries = Math.max(1, Number(root.querySelector('#eca-cache-count').value) || 200); c.cacheMaxMb = Math.max(1, Number(root.querySelector('#eca-cache-mb').value) || 512);
             persistTtsConfig(); pruneTtsCache(); root.style.display = 'none'; toast('音频设置已保存');
         });
