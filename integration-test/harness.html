@@ -2725,7 +2725,51 @@ test('M10-41 楼层重渲染后，播放/排队状态仍按角色+文本恢复�
   });
 });
 
+test('M10-42 用过第二音色后，该段第一音色的旧缓存被清掉（再单击会重新合成）', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: true }, doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', alt: { engine: 'doubao', voiceId: 'zh_male_dayi_saturn_bigtts' } });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“淘汰缓存用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  var countEdge = function (records) { return records.filter(function (r) { return r.engine === 'edge'; }).length; };
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __tap(btn);                           // 第一音色：合成并落盘
+    return __wait(220);
+  }).then(function () {
+    assert(__countTtsCalls('edge') === 1, '第一音色应先合成一次，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 1, '第一音色应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(countEdge(records) === 1, '第一音色应已落盘 1 条，实际 ' + countEdge(records) + ' 条');
+    window.__lastAudio.onended();
+    return __wait(500);
+  }).then(function () {
+    __doubleTap(btn);                     // 双击切第二音色
+    return __wait(320);
+  }).then(function () {
+    assert(__countTtsCalls('doubao') === 1, '第二音色应合成一次，实际 ' + __countTtsCalls('doubao') + ' 次');
+    assert(window.__audioPlayCount === 2, '第二音色应接着播，实际 ' + window.__audioPlayCount + ' 次');
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(countEdge(records) === 0, '用过第二音色后，该段第一音色的持久化缓存应被清掉，实际还剩 ' + countEdge(records) + ' 条');
+    assert(records.filter(function (r) { return r.engine === 'doubao'; }).length === 1, '第二音色自己的缓存不该被删');
+    window.__lastAudio.onended();
+    return __wait(500);
+  }).then(function () {
+    __tap(btn);                           // 再单击：旧缓存已清，应重新合成第一音色
+    return __wait(220);
+  }).then(function () {
+    assert(__countTtsCalls('edge') === 2, '单击应重新合成第一音色（旧缓存已被清），实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 3, '重新合成的一版应正常播放，实际 ' + window.__audioPlayCount + ' 次');
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    assert(countEdge(records) === 1, '重新合成的一版应重新落盘，实际 ' + countEdge(records) + ' 条');
+  });
+});
 
+/* ---------- 操作按钮 ---------- */
 __btn('种子数据(M1)', function () { __seedM1(); __log('已种子：弗兰克(10情绪) + 罗兰(仅默认)'); });
 __btn('添加AI楼层(含标签)', function () {
   __addFloor('{弗兰克(大笑)}“看不见的敌人？”弗兰克咧嘴一笑，那笑容里带着一股嗜血的狠劲。', false);

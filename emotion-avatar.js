@@ -1258,6 +1258,22 @@
         return picked;
     }
 
+    /**
+     * 用过第二音色后，清掉这一段第一音色的缓存（内存 + 持久化两层）。
+     * 否则用户之后单击这颗头像会听到「第一音色早先生成、已被淘汰的那一版」，像是换音色没生效；
+     * 只删这一段（同角色 + 同文本 + 第一音色的那一个键），第二音色自己的缓存与别段都不动。
+     */
+    function dropPrimaryVoiceCache(speech, altVoice) {
+        const primary = pickVoice(getVoiceConfig(speech.name), 'primary');
+        if (!primary) return;
+        const primaryKey = buildTtsKey(buildSpeechRequest(speech, primary));
+        // 两套音色配置完全一样时这个键就是刚生成的那一份，别自删
+        if (primaryKey === buildTtsKey(buildSpeechRequest(speech, altVoice))) return;
+        const inMemory = ttsMemoryCache.delete(primaryKey);
+        ttsDelete(primaryKey).catch(function () { /* 清不掉不影响本次播放，下次至多再回放一次旧版 */ });
+        dbg('用过第二音色，清除该段第一音色缓存（内存' + (inMemory ? '已删' : '无此条') + '）：' + String(speech.text).slice(0, 12));
+    }
+
     /** 播放与长按共用同一套请求装配，保证两处算出的缓存键完全一致 */
     function buildSpeechRequest(speech, voice) {
         const emotionRequest = buildEmotionRequest(voice.engine, speech.emotion, voice.voiceId);
@@ -1334,6 +1350,8 @@
             entry.blob = result.blob;
             entry.mime = result.mime || '';
             entry.abort = null;
+            // 用上了第二音色：把这一段第一音色的旧缓存清掉（含缓存命中的情形），免得那版被淘汰的音频再冒出来
+            if (entry.voiceMode === 'alt') dropPrimaryVoiceCache(speech, voice);
             // 强制重生成时明确回报结果，便于确认「这次真的重新请求了」而不是回放缓存
             if (entry.force) {
                 const queued = audioQueue[0] !== entry;
