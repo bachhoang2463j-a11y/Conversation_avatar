@@ -1522,10 +1522,16 @@ function __longPress(el, ms) {
     setTimeout(function () { __pointer(el, 'pointerup'); resolve(); }, ms || 700);
   });
 }
-/* 真实点击：pointerdown → pointerup → click（程序化 .click() 缺 pointerdown，会被长按回响判定拦下） */
+/* 真实点击：pointerdown → pointerup → click（程序化 .click() 缺 pointerdown，会被长按回响判定拦下）
+   默认鼠标手势；触摸手势用 __touchTap（触摸端双击窗口更宽、单击起播还会压到窗口之后） */
 function __tap(el) {
-  __pointer(el, 'pointerdown');
-  __pointer(el, 'pointerup');
+  __pointer(el, 'pointerdown', 0, 0, 'mouse');
+  __pointer(el, 'pointerup', 0, 0, 'mouse');
+  el.click();
+}
+function __touchTap(el) {
+  __pointer(el, 'pointerdown', 0, 0, 'touch');
+  __pointer(el, 'pointerup', 0, 0, 'touch');
   el.click();
 }
 /* 双击：两次真实点击 + dblclick（浏览器就是 click、click、dblclick 这个顺序） */
@@ -2773,6 +2779,40 @@ test('M10-42 第二音色缓存优先：生成过第二音色后，单击直接�
     assert(__countTtsCalls('doubao') === 2, '长按应重生成第二音色，实际豆包 ' + __countTtsCalls('doubao') + ' 次');
     assert(__countTtsCalls('edge') === 1, '长按不该回头合成第一音色，实际 edge ' + __countTtsCalls('edge') + ' 次');
     assert(__toasts().indexOf('已重新生成') !== -1, '应回报重生成结果：' + __toasts());
+  });
+});
+
+test('M10-43 触摸端：自己判定双击就能切第二音色，且第一音色不会抢播', function () {
+  __resetChat(); __seedM1(); __ttsReset(); __clearToasts();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.test/tts', rate: 0, pitch: 0, volume: 100, persist: true }, doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', alt: { engine: 'doubao', voiceId: 'zh_male_dayi_saturn_bigtts' } });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“触屏双击用例。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    window.EmoAvatar.clearTtsMemory();
+    __touchTap(btn);                      // 触摸单击：合成照常立刻开始
+    return __wait(200);
+  }).then(function () {
+    assert(__countTtsCalls('edge') === 1, '单击应立刻开始合成第一音色，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 0, '触摸端单击的声音要等双击窗口过去再出，实际已播 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-loading'), '等待窗口期间应处于加载态：' + btn.className);
+    return __wait(1500);                  // 等过触摸端窗口（600ms，留足定时器被拖慢的余量）
+  }).then(function () {
+    assert(window.__audioPlayCount === 1, '确认不是双击后应正常出声，实际 ' + window.__audioPlayCount + ' 次');
+    window.__lastAudio.onended();
+    return __wait(600);
+  }).then(function () {
+    // 触摸双击：连着两下、且故意不派发 dblclick（移动端常常收不到，必须自己判出来）。
+    // 两下不隔定时器等——测试环境的 setTimeout 会被拖慢，间隔一超窗口就变成两次单击了
+    __touchTap(btn);
+    __touchTap(btn);
+    return __wait(500);
+  }).then(function () {
+    assert(__countTtsCalls('doubao') === 1, '触摸双击应触发第二音色，实际 ' + __countTtsCalls('doubao') + ' 次');
+    assert(__countTtsCalls('edge') === 1, '第二下不该再合成第一音色，实际 ' + __countTtsCalls('edge') + ' 次');
+    assert(window.__audioPlayCount === 2, '只该出第二音色这一版的声音（第一音色被压住没出声），实际 ' + window.__audioPlayCount + ' 次');
+    assert(btn.classList.contains('eca-audio-playing'), '应处于播放态：' + btn.className);
   });
 });
 

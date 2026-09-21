@@ -133,8 +133,12 @@
     const TTS_RETRY_DELAY_MS = 500;
     /** 播放队列上限：合成是并行的，攒太多会白烧合成额度，点到超出即拒绝入队 */
     const AUDIO_QUEUE_MAX = 5;
-    /** 双击判定窗口：配了第二音色的头像，窗口内的第二次点击交给 dblclick 决定，避免「先取消再重播」的抖动 */
+    /**
+     * 双击判定窗口：鼠标端紧凑；触摸端放宽到 600ms——手指点两下比鼠标慢得多，系统手势窗口也更长，
+     * 宁可能多等一会儿也不要漏判（触摸端还会把单击的起播压到窗口之后，见 enqueueAvatarSpeech 的 notBefore）
+     */
     const DBLCLICK_GUARD_MS = 350;
+    const DBLCLICK_GUARD_TOUCH_MS = 600;
     /** 重复加载检测标记：同一页面加载两份脚本会让两套状态抢同一批头像 */
     const INSTANCE_FLAG = '__emotionAvatarInstance';
     const EDGE_EMOTION_STYLES = {
@@ -190,10 +194,13 @@
     /** 正在出声的音频（队列播放或面板「语音缓存」试听）；结束时连同它的 objectURL 一起释放 */
     let currentAudio = null;
     let currentAudioUrl = null;
-    /** 双击判定用：上一次点击的头像与时刻，以及最近一次 dblclick 的处理时刻 */
+    /** 双击判定用：上一次点击的头像与时刻、最近一次双击（自判或 dblclick）的处理时刻、最近一次手势的指针类型 */
     let lastClickAvatar = null;
     let lastClickAt = 0;
     let dblclickHandledAt = 0;
+    let lastPointerType = '';
+    /** 队首已就绪但还没到起播时刻时的补偿定时器（触摸端防抢播） */
+    let queuePumpTimer = null;
     let longPressTimer = null;
     let longPressTarget = null;
     let longPressStartX = 0;
@@ -1237,6 +1244,7 @@
 
     /** 全停：清空队列 + 停掉正在出声的音频（含面板试听），并复位全部头像状态类 */
     function stopAllAudio() {
+        if (queuePumpTimer !== null) { clearTimeout(queuePumpTimer); queuePumpTimer = null; }
         audioQueue.slice().forEach(disposeEntry);
         audioQueue = [];
         stopPlayingSound();
@@ -1272,6 +1280,11 @@
         return canUseVoice(getVoiceConfig(name), 'alt');
     }
 
+    /** 双击窗口按最近一次手势的指针类型取值：手指点两下比鼠标慢，给触摸端放宽 */
+    function doubleTapWindow() {
+        return lastPointerType === 'touch' ? DBLCLICK_GUARD_TOUCH_MS : DBLCLICK_GUARD_MS;
+    }
+
     /**
      * 「这次该用哪套音色」的默认判定：**第二音色只要已经生成过这一段（缓存里有这一版）就优先用它**。
      * 用过就优先，不需要另记状态——缓存本身就是状态；缓存里没有才回落到第一音色。
@@ -1303,6 +1316,7 @@
             key: key, name: speech.name, text: speech.text, voiceMode: voiceMode,
             avatar: avatar, force: !!force,
             phase: 'loading',   // loading（合成中/待判定）→ ready（就绪待播）→ playing（正在播）
+            notBefore: 0,       // 早于该时刻不开始出声（触摸端把单击起播压到双击窗口之后）
             abort: null, blob: null, mime: '', url: '', audio: null,
         };
     }
@@ -1349,6 +1363,10 @@
             return;
         }
         const entry = createAudioEntry(speech, key, voiceMode, avatar, force);
+        // 触摸端单击：合成照常立刻开始，但声音压到双击窗口之后再出——否则双击时先冒一声第一音色
+        if (!explicitMode && !force && lastPointerType === 'touch' && hasAltVoice(speech.name)) {
+            entry.notBefore = Date.now() + DBLCLICK_GUARD_TOUCH_MS;
+        }
         audioQueue.push(entry);
         dbg('语音入队（' + voiceMode + '，队列 ' + audioQueue.length + ' 条）');
         synthesizeEntry(entry, speech, voice);
@@ -1412,10 +1430,23 @@
         run(entry.voiceMode);
     }
 
-    /** 队列推进：队首就绪就播，队首还在合成则等它自己的回调再推进（后面的不抢播） */
+    /** 队首就绪但还没到起播时刻（触摸端防抢播）：到点再推进一次，重复排只保留一个 */
+    function scheduleQueuePump(delay) {
+        if (queuePumpTimer !== null) return;
+        queuePumpTimer = setTimeout(function () {
+            queuePumpTimer = null;
+            pumpQueue();
+        }, Math.max(16, Math.round(delay)));
+    }
+
+    /** 队列推进：队首就绪就播，队首还在合成/还没到起播时刻则等，后面的不抢播 */
     function pumpQueue() {
         const head = audioQueue[0];
-        if (head && head.phase === 'ready') startEntryPlayback(head);
+        if (head && head.phase === 'ready') {
+            const wait = (head.notBefore || 0) - Date.now();
+            if (wait > 0) scheduleQueuePump(wait);
+            else startEntryPlayback(head);
+        }
         syncAvatarClasses();
     }
 
@@ -1471,6 +1502,7 @@
         // （真实点击/右键总是先有 pointerdown；右键的 button 不是 0，下面才拦掉）
         longPressEcho = false;
         longPressHandled = false;
+        lastPointerType = event.pointerType || '';
         if (event.button !== undefined && event.button !== 0 && event.pointerType !== 'touch') return;
         const avatar = event.currentTarget;
         cancelLongPress();
@@ -1579,22 +1611,30 @@
                     }
                     event.preventDefault();
                     event.stopPropagation();
-                    if (avatar.dataset.ecaAltVoice === '1') {
-                        const now = Date.now();
-                        const secondClick = avatar === lastClickAvatar
-                            && now - lastClickAt <= DBLCLICK_GUARD_MS
-                            && now - dblclickHandledAt > DBLCLICK_GUARD_MS;
-                        lastClickAvatar = avatar;
-                        lastClickAt = now;
-                        // 双击的第二下交给 dblclick 决定用哪套音色，别先按「再点取消」把第一音色停掉
-                        if (secondClick) return;
+                    const now = Date.now();
+                    const win = doubleTapWindow();
+                    // 第二下自己判定成「双击」，不依赖浏览器是否补 dblclick：
+                    // 移动端双击手势常被系统/缩放吃掉，等 dblclick 会永远等不到
+                    const secondTap = avatar.dataset.ecaAltVoice === '1'
+                        && avatar === lastClickAvatar
+                        && now - lastClickAt <= win
+                        && now - dblclickHandledAt > win;
+                    lastClickAvatar = avatar;
+                    lastClickAt = now;
+                    if (secondTap) {
+                        dblclickHandledAt = now;   // 标记已处理：浏览器随后补的 dblclick 不再重复触发
+                        dbg('双击第二下：改用第二音色（窗口 ' + win + 'ms）');
+                        enqueueAvatarSpeech(avatar, { voiceMode: 'alt' });
+                        return;
                     }
                     enqueueAvatarSpeech(avatar);
                 });
                 avatar.addEventListener('dblclick', function (event) {
+                    // 兜底：click 之外还有 dblclick 通道时也认（自判已处理过就跳过）
                     if (!settings.ttsEnabled || longPressEcho) return;
-                    dblclickHandledAt = Date.now();
                     if (avatar.dataset.ecaAltVoice !== '1') return;   // 未配置第二音色：双击无影响
+                    if (Date.now() - dblclickHandledAt <= doubleTapWindow()) return;
+                    dblclickHandledAt = Date.now();
                     event.preventDefault();
                     event.stopPropagation();
                     enqueueAvatarSpeech(avatar, { voiceMode: 'alt' });
