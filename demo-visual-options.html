@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>情绪头像 · 底栏布局与镂空外发光动效方案选择</title>
+<style>
+  :root {
+    --font-serif: "Cinzel", "STSong", "Songti SC", "Noto Serif SC", Georgia, serif;
+    --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    
+    --parch-bg: #f5f0e3;
+    --parch-bg-gradient: linear-gradient(145deg, #fbf7ee 0%, #f4eddc 45%, #ecdfc7 100%);
+    --parch-border-outer: #cdbea2;
+    --parch-border-inner: #ded2bd;
+    --parch-border-gold: #c3984d;
+    --parch-ink-title: #2b1f13;
+    --parch-ink-body: #493725;
+    --parch-ink-muted: #7d6b56;
+    --parch-brass: #9c7138;
+    --parch-accent-green: #3f684c;
+    --eca-size: 5.0em;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-sans);
+    background: #18191f;
+    color: #e5e5e5;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 70px 16px 40px;
+    overflow-x: hidden;
+  }
+
+  /* 顶部悬浮控制条（纯净方案切换） */
+  .demo-nav-bar {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(26, 28, 36, 0.88);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 6px 14px;
+    border-radius: 30px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+  .demo-nav-group {
+    display: flex;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 20px;
+    padding: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .demo-btn {
+    background: none;
+    border: none;
+    color: #9da0b5;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .demo-btn:hover { color: #fff; }
+  .demo-btn.active {
+    background: linear-gradient(135deg, #c3984d, #9c7138);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(195, 152, 77, 0.35);
+  }
+  .demo-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  /* 演示容器外壳（模拟视口） */
+  .preview-stage {
+    width: 100%;
+    max-width: 920px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    transition: max-width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  body[data-device="mobile"] .preview-stage {
+    max-width: 390px;
+  }
+
+  /* 模拟管理面板弹窗 */
+  .eca-modal {
+    width: 100%;
+    background: var(--parch-bg);
+    background-image: var(--parch-bg-gradient);
+    color: var(--parch-ink-body);
+    border: 1px solid var(--parch-border-outer);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(35, 22, 10, 0.45), 0 0 0 1px rgba(160, 130, 90, 0.25);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .eca-modal::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 9px;
+    pointer-events: none;
+    box-shadow: inset 0 0 16px rgba(150, 115, 75, 0.1);
+  }
+
+  .eca-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 18px;
+    border-bottom: 1px solid var(--parch-border-inner);
+    background: rgba(246, 238, 222, 0.7);
+    font-weight: 700;
+    color: var(--parch-ink-title);
+    font-family: var(--font-serif);
+    font-size: 15px;
+    position: relative;
+    z-index: 2;
+  }
+  .eca-close {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--parch-ink-muted);
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 5px;
+    border-radius: 5px;
+  }
+
+  .eca-body {
+    display: flex;
+    min-height: 300px;
+    position: relative;
+    z-index: 1;
+  }
+  body[data-device="mobile"] .eca-body {
+    flex-direction: column;
+    min-height: 240px;
+  }
+
+  .eca-side {
+    width: 210px;
+    flex: 0 0 210px;
+    border-right: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.55);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  body[data-device="mobile"] .eca-side {
+    width: 100%;
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--parch-border-inner);
+    max-height: 140px;
+  }
+  .eca-side-title {
+    color: var(--parch-ink-title);
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-serif);
+    padding: 0 2px 4px;
+    border-bottom: 1px solid rgba(205, 190, 162, 0.45);
+  }
+  .eca-char-mock {
+    background: linear-gradient(90deg, #f2e4cb 0%, #fbf6ec 100%);
+    border: 1px solid #c3984d;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--parch-ink-title);
+    position: relative;
+  }
+  .eca-char-mock::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 3px;
+    bottom: 3px;
+    width: 3px;
+    background: var(--parch-brass);
+    border-radius: 2px;
+  }
+
+  .eca-detail {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .eca-detail-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--parch-border-inner);
+  }
+  .eca-detail-head b {
+    font-size: 18px;
+    font-family: var(--font-serif);
+    color: var(--parch-ink-title);
+  }
+  .eca-mini-btn {
+    padding: 3px 10px;
+    border-radius: 5px;
+    border: 1px solid #b8a584;
+    background: #fcf8f0;
+    color: var(--parch-ink-body);
+    font-size: 12px;
+  }
+  .eca-grid-mock {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+  body[data-device="mobile"] .eca-grid-mock {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .eca-cell-mock {
+    border: 1px solid var(--parch-border-inner);
+    border-radius: 6px;
+    padding: 4px;
+    text-align: center;
+    background: #fbf8f2;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .eca-cell-mock .img-placeholder {
+    width: 100%;
+    aspect-ratio: 1/1;
+    background: #e8deca;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9d8c78;
+  }
+
+  /* 基础按钮与控件样式 */
+  .eca-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .eca-add-char {
+    background: linear-gradient(180deg, #fefaf0 0%, #ebe0c8 100%);
+    border: 1px solid #c3984d;
+    color: #2b1f13;
+    box-shadow: 0 1px 3px rgba(110, 75, 30, 0.15), inset 0 1px 0 #fff;
+  }
+  .eca-add-group {
+    background: rgba(245, 237, 222, 0.7);
+    border: 1px solid #ded2bd;
+    color: #6d5b46;
+    box-shadow: 0 1px 2px rgba(60, 40, 20, 0.05);
+  }
+  .eca-switch {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 500;
+    color: #2b1f13;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .eca-switch input { accent-color: var(--parch-accent-green); cursor: pointer; margin: 0; }
+  .eca-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--parch-ink-body);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .eca-size input[type=range] { width: 85px; accent-color: var(--parch-brass); margin: 0; }
+  .eca-size-val { color: var(--parch-brass); font-weight: 600; font-family: Consolas, monospace; min-width: 3.2em; }
+
+  /* =======================================================
+     方案一：【分区归属 · 侧栏吸底 + 底栏单行】
+     把新增角色/分组直接移到左侧栏底部（功能归位）；
+     底栏变为：系统工具（左）+ 显示开关（右），高度极度克制！
+     ======================================================= */
+  .layout-scheme-1 .eca-side {
+    position: relative;
+    padding-bottom: 48px;
+  }
+  .layout-scheme-1 .side-bottom-actions {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+  }
+  .layout-scheme-1 .side-bottom-actions button {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+  body[data-device="mobile"].layout-scheme-1 .side-bottom-actions {
+    position: static;
+    margin-top: 6px;
+  }
+
+  .layout-scheme-1 .eca-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-top: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.85);
+    min-height: 44px;
+    gap: 12px;
+    position: relative;
+    z-index: 2;
+  }
+  .layout-scheme-1 .eca-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .layout-scheme-1 .eca-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+  /* 移动端优雅自适应 */
+  body[data-device="mobile"].layout-scheme-1 .eca-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  body[data-device="mobile"].layout-scheme-1 .eca-footer-left {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+  body[data-device="mobile"].layout-scheme-1 .eca-footer-left .eca-add {
+    width: 100%;
+    padding: 6px 0;
+    text-align: center;
+  }
+  body[data-device="mobile"].layout-scheme-1 .eca-footer-right {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(205, 190, 162, 0.6);
+  }
+
+  /* =======================================================
+     方案二：【胶囊工具组 · 雅致书签流】
+     底栏保持在一行，中间工具做成精雕羊皮纸胶囊卡片；
+     移动端采用清晰的 2 行 2x2 网格与下沉配置条
+     ======================================================= */
+  .layout-scheme-2 .eca-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-top: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.88);
+    gap: 10px;
+    min-height: 46px;
+  }
+  .layout-scheme-2 .eca-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .layout-scheme-2 .eca-footer-tools-capsule {
+    display: flex;
+    align-items: center;
+    background: rgba(235, 224, 205, 0.6);
+    border: 1px solid rgba(195, 152, 77, 0.35);
+    border-radius: 8px;
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  .layout-scheme-2 .eca-footer-tools-capsule button {
+    border: none;
+    background: transparent;
+    color: #5a4734;
+    font-size: 11.5px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  .layout-scheme-2 .eca-footer-tools-capsule button:hover {
+    background: #fff;
+    color: #2b1f13;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .layout-scheme-2 .eca-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  /* 方案二移动端：上层 5 个按钮统一整齐排列，下层设置项 */
+  body[data-device="mobile"].layout-scheme-2 .eca-footer {
+    flex-direction: column;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  body[data-device="mobile"].layout-scheme-2 .eca-footer-left {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  body[data-device="mobile"].layout-scheme-2 .eca-footer-tools-capsule {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+    padding: 3px;
+  }
+  body[data-device="mobile"].layout-scheme-2 .eca-footer-right {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(222, 210, 189, 0.8);
+  }
+
+  /* =======================================================
+     方案三：【全局设置收拢 · 极简高级抽屉】
+     将音频设置、缓存、排障整合成一个「⚙ 系统设置」下压气泡，
+     底栏界面极其空灵干净；移动端零堆叠！
+     ======================================================= */
+  .layout-scheme-3 .eca-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-top: 1px solid var(--parch-border-inner);
+    background: rgba(244, 235, 218, 0.85);
+    min-height: 44px;
+  }
+  .layout-scheme-3 .eca-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .layout-scheme-3 .eca-tools-dropdown-btn {
+    background: linear-gradient(180deg, #fcf8f0 0%, #ede3cc 100%);
+    border: 1px solid #c3984d;
+    color: #2b1f13;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .layout-scheme-3 .eca-tools-menu {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .layout-scheme-3 .eca-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  body[data-device="mobile"].layout-scheme-3 .eca-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  body[data-device="mobile"].layout-scheme-3 .eca-footer-left {
+    display: flex;
+    justify-content: space-between;
+  }
+  body[data-device="mobile"].layout-scheme-3 .eca-footer-left .eca-add {
+    flex: 1;
+  }
+  body[data-device="mobile"].layout-scheme-3 .eca-footer-right {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(205, 190, 162, 0.6);
+  }
+
+  /* =======================================================
+     楼层头像与播放态动效演示区（3 种镂空外发光形态对比）
+     ======================================================= */
+  .chat-demo-card {
+    background: #e8dec8;
+    background-image: linear-gradient(180deg, #f0e7d5 0%, #e6d8c0 100%);
+    border: 1px solid #cdbea2;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    color: #382c1e;
+  }
+  .chat-demo-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #2b1f13;
+    font-family: var(--font-serif);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(160, 130, 90, 0.3);
+    padding-bottom: 8px;
+  }
+  .chat-demo-tip {
+    font-size: 12px;
+    font-weight: normal;
+    color: #7d6b56;
+  }
+
+  .chat-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin: 16px 0;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.45);
+    border: 1px solid rgba(205, 190, 162, 0.5);
+    border-radius: 8px;
+  }
+
+  /* 基础头像样式 */
+  .demo-avatar {
+    width: 68px;
+    height: 68px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+    cursor: pointer;
+    position: relative;
+    background: #2b1f13;
+    transition: transform 0.2s ease;
+  }
+  .demo-avatar:hover {
+    transform: scale(1.02);
+  }
+  .avatar-desc {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .avatar-desc strong {
+    color: #2b1f13;
+    font-size: 14px;
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  /* ---------- 动效形态 A：【空灵光冕 · 悬浮镂空光环】 (Hollow Halo) ---------- */
+  /* 特点：头像外有 2.5px 纯净留白镂空，紧接着是一圈极细明亮晨曦金光环，外带柔和扩散微光，空灵澄澈 */
+  .glow-hollow-a {
+    box-shadow: 
+      0 0 0 2.5px #e8dec8, /* 留白镂空间隙（与背景融为一体） */
+      0 0 0 4px #f5d482,   /* 极细明亮金线 */
+      0 0 16px rgba(245, 212, 130, 0.75), /* 外层呼吸光冕 */
+      0 0 4px rgba(255, 245, 200, 0.9);
+    animation: hollow-halo-pulse 1.8s ease-in-out infinite alternate;
+  }
+  @keyframes hollow-halo-pulse {
+    0% {
+      box-shadow: 
+        0 0 0 2.5px #e8dec8,
+        0 0 0 3.5px #f0cb6c,
+        0 0 8px rgba(240, 203, 108, 0.4),
+        0 0 2px rgba(255, 245, 200, 0.6);
+    }
+    100% {
+      box-shadow: 
+        0 0 0 2.5px #e8dec8,
+        0 0 0 4.5px #ffe08a,
+        0 0 22px rgba(255, 215, 100, 0.9),
+        0 0 8px rgba(255, 245, 210, 0.95);
+    }
+  }
+
+  /* ---------- 动效形态 B：【声波金漪 · 镂空双重细浪】 (Hollow Wave Ripple) ---------- */
+  /* 特点：中心始终保留 2.5px 镂空，两道清澈纤细的光刃波纹呈水波荡漾交替扩散淡出，声波感极强 */
+  .glow-hollow-b {
+    box-shadow: 0 0 0 2.5px #e8dec8;
+    animation: hollow-ripple-wave 2.0s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+  }
+  @keyframes hollow-ripple-wave {
+    0% {
+      box-shadow: 
+        0 0 0 2px #e8dec8,
+        0 0 0 2.5px rgba(245, 212, 130, 0.9),
+        0 0 0 2.5px rgba(245, 212, 130, 0.5);
+    }
+    50% {
+      box-shadow: 
+        0 0 0 2px #e8dec8,
+        0 0 0 7px rgba(245, 212, 130, 0.75),
+        0 0 0 3px rgba(245, 212, 130, 0.9);
+    }
+    80% {
+      box-shadow: 
+        0 0 0 2px #e8dec8,
+        0 0 0 13px rgba(245, 212, 130, 0),
+        0 0 0 8px rgba(245, 212, 130, 0.4);
+    }
+    100% {
+      box-shadow: 
+        0 0 0 2px #e8dec8,
+        0 0 0 14px rgba(245, 212, 130, 0),
+        0 0 0 13px rgba(245, 212, 130, 0);
+    }
+  }
+
+  /* ---------- 动效形态 C：【流光微曜 · 极简悬浮光环】 (Breathing Ring) ---------- */
+  /* 特点：极度克制，细金丝环悬浮在头像外侧 3px 处，微微闪烁，高雅低调且绝不喧宾夺主 */
+  .glow-hollow-c {
+    box-shadow: 
+      0 0 0 3px #e8dec8,
+      0 0 0 4.5px rgba(240, 205, 120, 0.85),
+      0 0 10px rgba(240, 205, 120, 0.45);
+    animation: hollow-ring-breathe 2.4s ease-in-out infinite alternate;
+  }
+  @keyframes hollow-ring-breathe {
+    0% {
+      box-shadow: 
+        0 0 0 2.5px #e8dec8,
+        0 0 0 3.8px rgba(220, 180, 95, 0.6),
+        0 0 4px rgba(220, 180, 95, 0.2);
+    }
+    100% {
+      box-shadow: 
+        0 0 0 3.5px #e8dec8,
+        0 0 0 5.2px rgba(255, 225, 140, 0.95),
+        0 0 14px rgba(255, 215, 110, 0.6);
+    }
+  }
+</style>
+</head>
+<body data-scheme="1" data-device="desktop">
+
+<!-- 顶部无感方案切换条 -->
+<div class="demo-nav-bar">
+  <span style="font-size: 11px; font-weight: 700; color: #d4af37; text-transform: uppercase; letter-spacing: 0.05em;">底栏布局</span>
+  <div class="demo-nav-group" id="scheme-controls">
+    <button class="demo-btn active" data-scheme="1">方案 1 · 侧栏吸底分区</button>
+    <button class="demo-btn" data-scheme="2">方案 2 · 胶囊工具流</button>
+    <button class="demo-btn" data-scheme="3">方案 3 · 抽屉轻量收拢</button>
+  </div>
+  
+  <div class="demo-divider"></div>
+  
+  <span style="font-size: 11px; font-weight: 700; color: #a1a3b5;">视口模拟</span>
+  <div class="demo-nav-group" id="device-controls">
+    <button class="demo-btn active" data-device="desktop">🖥 桌面端</button>
+    <button class="demo-btn" data-device="mobile">📱 移动端 (390px)</button>
+  </div>
+</div>
+
+<div class="preview-stage" id="stage">
+  
+  <!-- 1:1 弹窗面板演示 -->
+  <div class="eca-modal">
+    <div class="eca-header">
+      <span>情绪头像管理</span>
+      <button class="eca-close">×</button>
+    </div>
+    
+    <div class="eca-body">
+      <div class="eca-side">
+        <div class="eca-side-title">已登记角色（可拖拽分组）</div>
+        <div class="eca-char-mock">林有声</div>
+        
+        <!-- 方案 1 的侧栏底部新增区（方案 1 独占） -->
+        <div class="side-bottom-actions" id="side-actions" style="display:none;">
+          <button class="eca-add eca-add-char">＋ 角色</button>
+          <button class="eca-add eca-add-group">＋ 分组</button>
+        </div>
+      </div>
+      
+      <div class="eca-detail">
+        <div class="eca-detail-head">
+          <b>林有声</b>
+          <button class="eca-mini-btn">语音设置</button>
+          <button class="eca-mini-btn">批量导入大图</button>
+          <button class="eca-mini-btn">改名</button>
+        </div>
+        
+        <div class="eca-grid-mock">
+          <div class="eca-cell-mock"><div class="img-placeholder">默认</div>默认</div>
+          <div class="eca-cell-mock"><div class="img-placeholder">微笑</div>微笑</div>
+          <div class="eca-cell-mock"><div class="img-placeholder">愤怒</div>愤怒</div>
+          <div class="eca-cell-mock"><div class="img-placeholder">悲伤</div>悲伤</div>
+          <div class="eca-cell-mock"><div class="img-placeholder">惊讶</div>惊讶</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 动态底栏 -->
+    <div class="eca-footer" id="dynamic-footer">
+      <!-- 由 JS 根据选中的方案注入 DOM -->
+    </div>
+  </div>
+
+  <!-- 播放态镂空外发光对比区 -->
+  <div class="chat-demo-card">
+    <div class="chat-demo-title">
+      <span>播放态动效对比 · 镂空通透外发光形态</span>
+      <span class="chat-demo-tip">点击头像可切换动效开启/停止</span>
+    </div>
+
+    <!-- 形态 A -->
+    <div class="chat-row">
+      <img src="拆图输出-林有声/林有声-微笑.png" class="demo-avatar glow-hollow-a" id="avatar-a" alt="形态A">
+      <div class="avatar-desc">
+        <strong>形态 A：空灵晨曦光冕（Hollow Halo）</strong>
+        头像外层留出 2.5px 透明镂空间隙，紧随 1.5px 明亮高光金环与向外呼吸扩散的金光雾晕。通透清澈，与底色完美交融，彻底消除沉重浑浊感。
+      </div>
+    </div>
+
+    <!-- 形态 B -->
+    <div class="chat-row">
+      <img src="拆图输出-林有声/林有声-微笑.png" class="demo-avatar glow-hollow-b" id="avatar-b" alt="形态B">
+      <div class="avatar-desc">
+        <strong>形态 B：双层镂空涟漪微浪（Hollow Wave Ripple）</strong>
+        保持 2.5px 纯净镂空，外围两道纤细如丝的晨光声波向外荡漾扩散并自然消散。中心通透不遮挡头像，声波波动感十足。
+      </div>
+    </div>
+
+    <!-- 形态 C -->
+    <div class="chat-row">
+      <img src="拆图输出-林有声/林有声-微笑.png" class="demo-avatar glow-hollow-c" id="avatar-c" alt="形态C">
+      <div class="avatar-desc">
+        <strong>形态 C：悬浮微曜光环（Breathing Ring）</strong>
+        极简克制，细金丝环悬浮在头像外侧 3px 处，微微做柔和呼吸脉冲。质感高雅，绝不喧宾夺主。
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const footerTemplates = {
+    // 方案 1：侧栏吸底 + 底栏纯粹单行（系统工具左，控制选项右）
+    '1': `
+      <div class="eca-footer-left">
+        <button class="eca-add eca-add-group" title="配置语音引擎">音频设置</button>
+        <button class="eca-add eca-add-group" title="查看本地语音缓存">语音缓存</button>
+        <button class="eca-add eca-add-char" title="生成诊断报告">⚙ 排障</button>
+      </div>
+      <div class="eca-footer-right">
+        <label class="eca-switch"><input type="checkbox" checked> 提示词注入</label>
+        <label class="eca-switch"><input type="checkbox" checked> 语音播放</label>
+        <div class="eca-size"><span>大小</span><input type="range" min="1.5" max="5" step="0.1" value="5.0"><span class="eca-size-val">5.0em</span></div>
+        <label class="eca-switch"><input type="checkbox"> 延时渲染</label>
+        <label class="eca-switch"><input type="checkbox"> 置顶</label>
+      </div>
+    `,
+    // 方案 2：精雕胶囊工具组（桌面端极紧凑，移动端 2x2 网格 + 下沉工具条）
+    '2': `
+      <div class="eca-footer-left">
+        <button class="eca-add eca-add-char">＋ 新增角色</button>
+        <button class="eca-add eca-add-group">＋ 新增分组</button>
+      </div>
+      <div class="eca-footer-tools-capsule">
+        <button>🎧 音频设置</button>
+        <button>📦 语音缓存</button>
+        <button>⚙ 排障</button>
+      </div>
+      <div class="eca-footer-right">
+        <label class="eca-switch"><input type="checkbox" checked> 提示词</label>
+        <label class="eca-switch"><input type="checkbox" checked> 语音</label>
+        <div class="eca-size"><input type="range" min="1.5" max="5" step="0.1" value="5.0"><span class="eca-size-val">5.0em</span></div>
+        <label class="eca-switch"><input type="checkbox"> 延时</label>
+        <label class="eca-switch"><input type="checkbox"> 置顶</label>
+      </div>
+    `,
+    // 方案 3：抽屉收拢式（把次要的系统设置合并为下拉，底栏空灵通透）
+    '3': `
+      <div class="eca-footer-left">
+        <button class="eca-add eca-add-char">＋ 新增角色</button>
+        <button class="eca-add eca-add-group">＋ 新增分组</button>
+        <div class="eca-tools-menu">
+          <button class="eca-tools-dropdown-btn">⚙ 系统设置 ▾</button>
+        </div>
+      </div>
+      <div class="eca-footer-right">
+        <label class="eca-switch"><input type="checkbox" checked> 启用提示词注入</label>
+        <label class="eca-switch"><input type="checkbox" checked> 启用语音播放</label>
+        <div class="eca-size"><span>头像大小</span><input type="range" min="1.5" max="5" step="0.1" value="5.0"><span class="eca-size-val">5.0em</span></div>
+        <label class="eca-switch"><input type="checkbox"> 延时</label>
+        <label class="eca-switch"><input type="checkbox"> 置顶</label>
+      </div>
+    `
+  };
+
+  function applyScheme(scheme) {
+    document.body.className = `layout-scheme-${scheme}`;
+    document.body.dataset.scheme = scheme;
+    document.getElementById('dynamic-footer').innerHTML = footerTemplates[scheme];
+    
+    // 方案 1 的侧栏底部操作
+    document.getElementById('side-actions').style.display = scheme === '1' ? 'flex' : 'none';
+    
+    document.querySelectorAll('#scheme-controls .demo-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.scheme === scheme);
+    });
+  }
+
+  function applyDevice(device) {
+    document.body.dataset.device = device;
+    document.querySelectorAll('#device-controls .demo-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.device === device);
+    });
+  }
+
+  // 绑定切换事件
+  document.getElementById('scheme-controls').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (btn && btn.dataset.scheme) applyScheme(btn.dataset.scheme);
+  });
+  document.getElementById('device-controls').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (btn && btn.dataset.device) applyDevice(btn.dataset.device);
+  });
+
+  // 点击头像切换动效演示
+  ['avatar-a', 'avatar-b', 'avatar-c'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cls = el.className.split(' ').find(c => c.startsWith('glow-'));
+    el.addEventListener('click', () => {
+      if (el.classList.contains(cls)) {
+        el.classList.remove(cls);
+      } else {
+        el.classList.add(cls);
+      }
+    });
+  });
+
+  // 初始化方案 1 + 桌面端
+  applyScheme('1');
+  applyDevice('desktop');
+</script>
+</body>
+</html>
