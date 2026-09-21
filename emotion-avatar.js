@@ -15,14 +15,19 @@
     // 常量定义
     // ============================================
     const SCRIPT_NAME = '情绪头像';
-    const VERSION = '0.2.10';
+    const VERSION = '0.3.0';
     const DB_NAME = 'EmotionAvatarDB';
     const DB_VERSION = 1;
     const STORE_AVATARS = 'avatars';
+    const TTS_DB_NAME = 'EmotionAvatarTtsDB';
+    const TTS_DB_VERSION = 1;
+    const TTS_STORE = 'audio';
     const INJECT_ID = 'emoavatar-prompt';
     const LS_CHARACTERS = 'emoavatar_characters';
     const LS_SETTINGS = 'emoavatar_settings';
     const LS_ALIASES = 'emoavatar_aliases';
+    const LS_TTS_VOICES = 'emoavatar_tts_voices';
+    const LS_TTS_CONFIG = 'emoavatar_tts_config';
     /** 固定情绪词十个；顺序即批量导入网格的默认映射顺序。自定义情绪按角色独立（有图才算，见 getCustomEmotions） */
     const EMOTIONS = ['默认', '微笑', '愤怒', '悲伤', '惊讶', '轻蔑', '杀意', '思考', '大笑', '害羞'];
     const EMOTION_SET = new Set(EMOTIONS);
@@ -37,6 +42,40 @@
     const TAG_RE = /\{([^{}()]{1,30})\(([^{}()]{1,8})\)\}/g;
     /** 头像显示高度默认值（em），面板可调 */
     const DEFAULT_SIZE = 2.5;
+    const TTS_ENGINES = ['edge', 'minimax', 'doubao'];
+    const EDGE_VOICES = [
+        { id: 'zh-CN-XiaoxiaoNeural', name: '晓晓（女）', styles: ['general', 'affectionate', 'angry', 'assistant', 'calm', 'cheerful', 'chat', 'customerservice', 'depressed', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'newscast', 'poetry-reading', 'sad', 'shouting'] },
+        { id: 'zh-CN-YunxiNeural', name: '云希（男）', styles: ['general', 'angry', 'assistant', 'calm', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'gentle', 'lyrical', 'narration-relaxed', 'sad', 'serious', 'shouting'] },
+        { id: 'zh-CN-YunjianNeural', name: '云健（男）', styles: ['general', 'angry', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'sad', 'serious', 'shouting'] },
+        { id: 'zh-CN-XiaoyiNeural', name: '晓伊（女）', styles: ['general', 'affectionate', 'angry', 'cheerful', 'depressed', 'disgruntled', 'fearful', 'gentle', 'sad', 'serious', 'shouting'] },
+        { id: 'zh-CN-liaoning-XiaobeiNeural', name: '晓北（女）', styles: ['general', 'angry', 'cheerful', 'sad'] },
+        { id: 'zh-CN-shaanxi-XiaoniNeural', name: '晓妮（女）', styles: ['general', 'angry', 'cheerful', 'sad'] },
+    ];
+    const EDGE_EMOTION_STYLES = {
+        '默认': 'general', '微笑': 'cheerful', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'cheerful',
+        '轻蔑': 'disgruntled', '杀意': 'serious', '思考': 'calm', '大笑': 'cheerful', '害羞': 'affectionate',
+    };
+    const MINIMAX_EMOTIONS = {
+        '微笑': 'happy', '愤怒': 'angry', '悲伤': 'sad', '惊讶': 'surprised', '轻蔑': 'disgusted',
+        '杀意': 'angry', '思考': 'calm', '大笑': 'happy',
+    };
+    const DEFAULT_TTS_CONFIG = {
+        edge: { proxyUrl: 'https://skybook.qzz.io/tts', rate: 0, pitch: 0, volume: 100, persist: false },
+        minimax: { apiKey: '', platform: 'cn', model: 'speech-2.8-hd', sampleRate: 32000, persist: true },
+        doubao: { appId: '', accessKey: '', uid: '1222356', sampleRate: 24000, persist: true },
+        cacheDays: 30, cacheMaxEntries: 200, cacheMaxMb: 512,
+    };
+    let voiceMap = {};
+    let ttsConfig = JSON.parse(JSON.stringify(DEFAULT_TTS_CONFIG));
+    let ttsDbPromise = null;
+    const ttsMemoryCache = new Map();
+    const audioEntries = new Map();
+    let audioEntrySeq = 1;
+    let currentAudio = null;
+    let currentAudioUrl = null;
+    let currentAudioButton = null;
+    let currentAudioState = null;
+    let audioRequestSeq = 0;
 
     // ============================================
     // 运行环境（酒馆助手脚本运行在 iframe 内，DOM/样式走顶层窗口）
@@ -105,7 +144,7 @@
     // groups: [{id, name, enabled, members:[角色名]}]；characters 为拍平索引（isRegistered 等零改动）
     // 组开关只控制提示词注入（角色卡切换用），不影响已渲染头像与素材库
     // ============================================
-    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1', topAlign: false, delayRender: false };
+    let settings = { enabled: true, size: DEFAULT_SIZE, batchCropRatio: '1:1', topAlign: false, delayRender: false, ttsEnabled: true };
     let characters = [];
     let groups = [];
     let groupSeq = 1;
@@ -173,6 +212,7 @@
             const s = JSON.parse(topWindow.localStorage.getItem(LS_SETTINGS));
             if (s && typeof s === 'object') Object.assign(settings, s);
         } catch (e) { /* 保持默认 */ }
+        loadTtsState();
     }
 
     function persistCharacters() {
@@ -189,13 +229,539 @@
         try { topWindow.localStorage.setItem(LS_ALIASES, JSON.stringify(aliases)); } catch (e) { /* 存储失败不阻塞 */ }
     }
 
+    function mergeTtsConfig(stored) {
+        const next = JSON.parse(JSON.stringify(DEFAULT_TTS_CONFIG));
+        if (!stored || typeof stored !== 'object') return next;
+        ['edge', 'minimax', 'doubao'].forEach(function (engine) {
+            if (stored[engine] && typeof stored[engine] === 'object') Object.assign(next[engine], stored[engine]);
+        });
+        ['cacheDays', 'cacheMaxEntries', 'cacheMaxMb'].forEach(function (key) {
+            if (stored[key] !== undefined) next[key] = Number(stored[key]) || next[key];
+        });
+        return next;
+    }
+
+    function loadTtsState() {
+        try {
+            const storedMap = JSON.parse(topWindow.localStorage.getItem(LS_TTS_VOICES));
+            if (storedMap && typeof storedMap === 'object') voiceMap = storedMap;
+        } catch (e) { voiceMap = {}; }
+        try {
+            ttsConfig = mergeTtsConfig(JSON.parse(topWindow.localStorage.getItem(LS_TTS_CONFIG)));
+        } catch (e) { ttsConfig = mergeTtsConfig(null); }
+    }
+
+    function persistVoiceMap() {
+        try { topWindow.localStorage.setItem(LS_TTS_VOICES, JSON.stringify(voiceMap)); } catch (e) { /* 存储失败不阻塞 */ }
+    }
+
+    function persistTtsConfig() {
+        try { topWindow.localStorage.setItem(LS_TTS_CONFIG, JSON.stringify(ttsConfig)); } catch (e) { /* 存储失败不阻塞 */ }
+    }
+
+    function getVoiceConfig(displayName) {
+        const primary = resolveName(displayName) || displayName;
+        const value = voiceMap[primary];
+        return value && typeof value === 'object' ? value : null;
+    }
+
+    function setVoiceConfig(name, value) {
+        const primary = resolveName(name) || name;
+        if (!value || !value.engine || !value.voiceId) delete voiceMap[primary];
+        else voiceMap[primary] = { engine: value.engine, voiceId: String(value.voiceId).trim(), resourceId: String(value.resourceId || '').trim() };
+        persistVoiceMap();
+        if (panelEl) renderPanel();
+    }
+
     // ============================================
-    // 样式注入
+    // TTS 持久化缓存与三引擎合成
     // ============================================
+    function openTtsDb() {
+        if (ttsDbPromise) return ttsDbPromise;
+        ttsDbPromise = new Promise(function (resolve, reject) {
+            const request = indexedDB.open(TTS_DB_NAME, TTS_DB_VERSION);
+            request.onupgradeneeded = function () {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(TTS_STORE)) {
+                    db.createObjectStore(TTS_STORE, { keyPath: 'key' }).createIndex('createdAt', 'createdAt', { unique: false });
+                }
+            };
+            request.onsuccess = function () { resolve(request.result); };
+            request.onerror = function () { reject(request.error); };
+        });
+        return ttsDbPromise;
+    }
+
+    function ttsStore(mode) {
+        return openTtsDb().then(function (db) { return db.transaction(TTS_STORE, mode).objectStore(TTS_STORE); });
+    }
+
+    function ttsGet(key) {
+        return ttsStore('readonly').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const req = store.get(key);
+                req.onsuccess = function () { resolve(req.result || null); };
+                req.onerror = function () { reject(req.error); };
+            });
+        });
+    }
+
+    function ttsPut(record) {
+        return ttsStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const req = store.put(record);
+                req.onsuccess = function () { resolve(record); };
+                req.onerror = function () { reject(req.error); };
+            });
+        });
+    }
+
+    function ttsGetAll() {
+        return ttsStore('readonly').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const req = store.getAll();
+                req.onsuccess = function () { resolve(req.result || []); };
+                req.onerror = function () { reject(req.error); };
+            });
+        });
+    }
+
+    function ttsDelete(key) {
+        return ttsStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const req = store.delete(key);
+                req.onsuccess = function () { resolve(); };
+                req.onerror = function () { reject(req.error); };
+            });
+        });
+    }
+
+    function ttsClear() {
+        return ttsStore('readwrite').then(function (store) {
+            return new Promise(function (resolve, reject) {
+                const req = store.clear();
+                req.onsuccess = function () { resolve(); };
+                req.onerror = function () { reject(req.error); };
+            });
+        });
+    }
+
+    function ttsKeyPart(value) {
+        return encodeURIComponent(String(value === undefined || value === null ? '' : value));
+    }
+
+    function buildTtsKey(request) {
+        return [request.engine, request.platform, request.model, request.resourceId, request.voiceId, request.text, request.emotionParam || '', request.style || '', request.contextText || ''].map(ttsKeyPart).join('|');
+    }
+
+    function getEdgeVoice(id) {
+        return EDGE_VOICES.filter(function (voice) { return voice.id === id; })[0] || null;
+    }
+
+    function edgeStyleFor(emotion, voiceId) {
+        const voice = getEdgeVoice(voiceId);
+        const candidate = EDGE_EMOTION_STYLES[emotion] || 'general';
+        return voice && voice.styles.indexOf(candidate) !== -1 ? candidate : 'general';
+    }
+
+    function minimaxEmotionFor(emotion) {
+        return MINIMAX_EMOTIONS[emotion] || '';
+    }
+
+    function buildEmotionRequest(engine, emotion, voiceId) {
+        if (!emotion || emotion === '默认') return {};
+        if (engine === 'edge') return { style: edgeStyleFor(emotion, voiceId) };
+        if (engine === 'minimax') return { emotionParam: minimaxEmotionFor(emotion) };
+        return { contextText: '请用“' + emotion + '”的语气朗读这段话。' };
+    }
+
+    function fetchWithTimeout(url, options, timeout) {
+        const controller = typeof topWindow.AbortController === 'function' ? new topWindow.AbortController() : null;
+        const opts = Object.assign({}, options || {});
+        if (controller) opts.signal = controller.signal;
+        let timer = null;
+        const promise = topWindow.fetch(url, opts);
+        if (!controller) return promise;
+        return Promise.race([
+            promise,
+            new Promise(function (_, reject) { timer = setTimeout(function () { controller.abort(); reject(new Error('请求超时')); }, timeout || 15000); }),
+        ]).then(function (result) { clearTimeout(timer); return result; }, function (error) { clearTimeout(timer); throw error; });
+    }
+
+    function ensureAudioResponse(response) {
+        if (!response || !response.ok) throw new Error('服务返回 HTTP ' + (response && response.status || '未知'));
+        const type = response.headers && response.headers.get ? response.headers.get('content-type') : '';
+        if (type && type.indexOf('audio') === -1 && type.indexOf('octet-stream') === -1) throw new Error('响应不是音频');
+        return response.blob();
+    }
+
+    function synthesizeEdge(text, request) {
+        const cfg = ttsConfig.edge;
+        if (!cfg.proxyUrl || !request.voiceId) return Promise.reject(new Error('Edge 音色或代理地址未配置'));
+        const params = new URLSearchParams();
+        params.set('t', text); params.set('v', request.voiceId);
+        params.set('r', String(Number(cfg.rate) || 0)); params.set('p', String(Number(cfg.pitch) || 0));
+        params.set('s', request.style || 'general'); params.set('vol', String(Number(cfg.volume) || 100));
+        return fetchWithTimeout(cfg.proxyUrl + (cfg.proxyUrl.indexOf('?') === -1 ? '?' : '&') + params.toString(), { headers: { Accept: 'audio/*' } }, 15000)
+            .then(ensureAudioResponse).then(function (blob) { return { blob: blob, mime: blob.type || 'audio/mpeg' }; });
+    }
+
+    function hexToBlob(hex, mime) {
+        const clean = String(hex || '').replace(/^0x/, '');
+        const bytes = new Uint8Array(Math.floor(clean.length / 2));
+        for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
+        return new Blob([bytes], { type: mime || 'audio/mpeg' });
+    }
+
+    function synthesizeMinimax(text, request) {
+        const cfg = ttsConfig.minimax;
+        const keys = String(cfg.apiKey || '').split(/[\n,，]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+        if (!keys.length) return Promise.reject(new Error('MiniMax API Key 未配置'));
+        const base = cfg.platform === 'io' ? 'https://api.minimax.io/v1' : 'https://api.minimaxi.com/v1';
+        const body = {
+            model: cfg.model || 'speech-2.8-hd', text: text, stream: false,
+            voice_setting: { voice_id: request.voiceId, speed: 1, vol: 1, pitch: 0 },
+            audio_setting: { format: 'mp3', sample_rate: Number(cfg.sampleRate) || 32000, channel: 1, bitrate: 128000 },
+            output_format: 'hex',
+        };
+        if (request.emotionParam) body.voice_setting.emotion = request.emotionParam;
+        let index = 0;
+        function attempt() {
+            const key = keys[index++ % keys.length];
+            return fetchWithTimeout(base + '/t2a_v2', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 30000)
+                .then(function (response) {
+                    if (!response.ok) throw new Error('MiniMax HTTP ' + response.status);
+                    return response.json();
+                }).then(function (data) {
+                    if (!data || !data.base_resp || data.base_resp.status_code !== 0 || !data.data || !data.data.audio) throw new Error((data && data.base_resp && data.base_resp.status_msg) || 'MiniMax 合成失败');
+                    const audio = data.data.audio;
+                    const blob = typeof audio === 'string' && /^[0-9a-f]+$/i.test(audio) ? hexToBlob(audio, 'audio/mpeg') : null;
+                    if (!blob) throw new Error('MiniMax 未返回可用音频');
+                    return { blob: blob, mime: blob.type };
+                });
+        }
+        return attempt();
+    }
+
+    function base64ToBytes(value) {
+        const binary = topWindow.atob(value);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    }
+
+    function synthesizeDoubao(text, request) {
+        const cfg = ttsConfig.doubao;
+        if (!cfg.appId || !cfg.accessKey || !request.voiceId || !request.resourceId) return Promise.reject(new Error('豆包 App ID、Access Key、音色和 Resource ID 均需配置'));
+        const payload = {
+            user: { uid: cfg.uid || '1222356' },
+            req_params: {
+                text: text, speaker: request.voiceId,
+                audio_params: { format: 'mp3', sample_rate: Number(cfg.sampleRate) || 24000 },
+                additions: JSON.stringify({ context_texts: request.contextText ? [request.contextText] : [] }),
+            },
+        };
+        return fetchWithTimeout('https://openspeech.bytedance.com/api/v3/tts/unidirectional', {
+            method: 'POST',
+            headers: { 'X-Api-App-Key': cfg.appId, 'X-Api-Access-Key': cfg.accessKey, 'X-Api-Resource-Id': request.resourceId, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }, 30000).then(function (response) {
+            if (!response.ok) throw new Error('豆包 HTTP ' + response.status);
+            return response.text();
+        }).then(function (raw) {
+            const chunks = [];
+            raw.split(/\r?\n/).forEach(function (line) {
+                if (!line.trim()) return;
+                let item;
+                try { item = JSON.parse(line); } catch (e) { return; }
+                if (item.code && item.code !== 0 && item.code !== 20000000) throw new Error(item.message || '豆包合成失败');
+                if (item.data) chunks.push(base64ToBytes(item.data));
+            });
+            if (!chunks.length) throw new Error('豆包未返回可用音频');
+            const blob = new Blob(chunks, { type: 'audio/mpeg' });
+            return { blob: blob, mime: blob.type };
+        });
+    }
+
+    function synthesizeTts(text, request) {
+        if (request.engine === 'edge') return synthesizeEdge(text, request);
+        if (request.engine === 'minimax') return synthesizeMinimax(text, request);
+        if (request.engine === 'doubao') return synthesizeDoubao(text, request);
+        return Promise.reject(new Error('未知语音引擎'));
+    }
+
+    function shouldPersist(engine) { return !!(ttsConfig[engine] && ttsConfig[engine].persist); }
+
+    function loadPersistentTts(key) {
+        if (!shouldPersist(key.split('|')[0])) return Promise.resolve(null);
+        return ttsGet(key).catch(function () { return null; });
+    }
+
+    function savePersistentTts(record) {
+        if (!shouldPersist(record.engine)) return Promise.resolve();
+        return ttsPut(record).then(function () { return pruneTtsCache(); }).catch(function (e) { toast('语音缓存写入失败：' + (e.message || e), true); });
+    }
+
+    function pruneTtsCache() {
+        return ttsGetAll().then(function (records) {
+            const now = Date.now();
+            const maxAge = Math.max(1, Number(ttsConfig.cacheDays) || 30) * 86400000;
+            const maxEntries = Math.max(1, Number(ttsConfig.cacheMaxEntries) || 200);
+            const maxBytes = Math.max(1, Number(ttsConfig.cacheMaxMb) || 512) * 1024 * 1024;
+            const remove = records.filter(function (r) { return now - r.createdAt > maxAge; });
+            let kept = records.filter(function (r) { return remove.indexOf(r) === -1; }).sort(function (a, b) { return b.createdAt - a.createdAt; });
+            let total = kept.reduce(function (sum, r) { return sum + (r.size || r.blob.size || 0); }, 0);
+            while (kept.length > maxEntries || total > maxBytes) {
+                const old = kept.pop();
+                if (!old) break;
+                total -= old.size || old.blob.size || 0;
+                remove.push(old);
+            }
+            return Promise.all(remove.map(function (r) { return ttsDelete(r.key); }));
+        }).catch(function () { return undefined; });
+    }
+
+    /** 取音频：内存 → 持久化 → 真正合成；命中任一层都不再消耗合成额度 */
+    function getOrCreateAudio(text, request) {
+        const key = buildTtsKey(request);
+        if (ttsMemoryCache.has(key)) {
+            const hit = ttsMemoryCache.get(key);
+            return Promise.resolve({ key: key, blob: hit.blob, mime: hit.mime, cached: true });
+        }
+        return loadPersistentTts(key).then(function (record) {
+            if (record) {
+                ttsMemoryCache.set(key, { blob: record.blob, mime: record.mime });
+                return { key: key, blob: record.blob, mime: record.mime, cached: true };
+            }
+            return synthesizeTts(text, request).then(function (result) {
+                ttsMemoryCache.set(key, result);
+                const record = {
+                    key: key, engine: request.engine, platform: request.platform || '', model: request.model || '',
+                    resourceId: request.resourceId || '', voiceId: request.voiceId, text: text,
+                    emotion: request.emotion || '', emotionParam: request.emotionParam || '', contextText: request.contextText || '',
+                    mime: result.mime, blob: result.blob, size: result.blob.size, createdAt: Date.now(),
+                };
+                return savePersistentTts(record).then(function () {
+                    return { key: key, blob: result.blob, mime: result.mime, cached: false };
+                });
+            });
+        });
+    }
+
+    function extractQuotedText(text) {
+        const pairs = { '“': '”', '"': '"', '「': '」', '『': '』', '«': '»' };
+        const closers = new Set(['”', '」', '』', '»']);
+        const source = String(text || '');
+        const parts = [];
+        let start = -1;
+        let close = '';
+        let buffer = '';
+        for (let i = 0; i < source.length; i++) {
+            const ch = source[i];
+            if (start < 0) {
+                if (pairs[ch]) { start = i; close = pairs[ch]; buffer = ''; }
+                continue;
+            }
+            if (ch === close) {
+                const value = buffer.trim();
+                if (value) parts.push(value);
+                start = -1; close = ''; buffer = '';
+            } else {
+                // 外层双引号中的单引号与其它字符均保留，不改变状态机。
+                buffer += ch;
+            }
+        }
+        return parts;
+    }
+
+    function textFromRange(root) {
+        if (!root) return '';
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const chunks = [];
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (node.parentElement && node.parentElement.closest('.eca-avatar, .eca-audio-overlay')) continue;
+            chunks.push(node.nodeValue || '');
+        }
+        return chunks.join('');
+    }
+
+    function getAvatarSpeech(avatar) {
+        if (!avatar || avatar.classList.contains('eca-placeholder')) return null;
+        const mes = avatar.closest('.mes');
+        if (!mes || mes.classList.contains('is_user')) return null;
+        const paragraph = avatar.closest('.eca-p');
+        let source = null;
+        if (paragraph) {
+            const directText = paragraph.querySelector(':scope > .eca-text');
+            if (directText) {
+                const nested = Array.prototype.slice.call(directText.querySelectorAll('.eca-avatar'));
+                const directAvatar = paragraph.querySelector(':scope > .eca-avatar');
+                if (avatar === directAvatar) {
+                    const range = doc.createRange();
+                    range.selectNodeContents(directText);
+                    if (nested.length) range.setEndBefore(nested[0]);
+                    const holder = doc.createElement('div');
+                    holder.appendChild(range.cloneContents());
+                    source = textFromRange(holder);
+                } else {
+                    const index = nested.indexOf(avatar);
+                    if (index !== -1) {
+                        // 同一 .eca-text 内：本头像的区间 = 自身之后 → 下一个头像之前
+                        const range = doc.createRange();
+                        range.selectNodeContents(directText);
+                        range.setStartAfter(avatar);
+                        if (index + 1 < nested.length) range.setEndBefore(nested[index + 1]);
+                        const holder = doc.createElement('div');
+                        holder.appendChild(range.cloneContents());
+                        source = textFromRange(holder);
+                    } else {
+                        source = textFromRange(directText);
+                    }
+                }
+            }
+        }
+        if (source === null) {
+            const parent = avatar.parentElement;
+            if (!parent) return null;
+            const siblings = Array.prototype.slice.call(parent.querySelectorAll(':scope > .eca-avatar'));
+            const index = siblings.indexOf(avatar);
+            const nodes = [];
+            let started = false;
+            for (let i = 0; i < parent.childNodes.length; i++) {
+                const node = parent.childNodes[i];
+                if (node === avatar) { started = true; continue; }
+                if (started && node.nodeType === 1 && node.classList.contains('eca-avatar')) break;
+                if (started) nodes.push(node.cloneNode(true));
+            }
+            const holder = doc.createElement('div');
+            nodes.forEach(function (node) { holder.appendChild(node); });
+            source = textFromRange(holder);
+            if (index < 0) source = '';
+        }
+        const quotes = extractQuotedText(source);
+        if (!quotes.length) return null;
+        return { text: quotes.join('\n'), emotion: avatar.dataset.ecaEmotion || '默认', name: avatar.dataset.ecaName || '' };
+    }
+
+    function stopCurrentAudio() {
+        if (currentAudio) {
+            try { currentAudio.pause(); } catch (e) { /* 已停止 */ }
+            currentAudio.onended = null;
+            currentAudio.onerror = null;
+        }
+        if (currentAudioUrl) {
+            try { topWindow.URL.revokeObjectURL(currentAudioUrl); } catch (e) { /* 已释放 */ }
+        }
+        if (currentAudioButton) {
+            currentAudioButton.classList.remove('eca-audio-loading', 'eca-audio-playing');
+            currentAudioButton.textContent = '🔊';
+        }
+        currentAudio = null; currentAudioUrl = null; currentAudioButton = null;
+        currentAudioState = null;
+    }
+
+    /** 视听状态按「角色 + 文本」记录：重扫重建按钮后据此恢复播放/合成态 */
+    function applyAudioStateToButton(button, speech) {
+        if (!currentAudioState) return;
+        if (currentAudioState.name !== speech.name || currentAudioState.text !== speech.text) return;
+        button.classList.add(currentAudioState.phase === 'playing' ? 'eca-audio-playing' : 'eca-audio-loading');
+        button.textContent = currentAudioState.phase === 'playing' ? '■' : '…';
+    }
+
+    function playAvatarSpeech(button, avatar) {
+        if (currentAudioButton === button && (currentAudio || button.classList.contains('eca-audio-loading'))) {
+            stopCurrentAudio();
+            return;
+        }
+        stopCurrentAudio();
+        const speech = getAvatarSpeech(avatar);
+        if (!speech) return;
+        const voice = getVoiceConfig(speech.name);
+        if (!voice) { toast('请先为「' + speech.name + '」配置语音引擎和音色', true); return; }
+        if (TTS_ENGINES.indexOf(voice.engine) === -1) { toast('语音引擎配置无效，请重新选择', true); return; }
+        const emotionRequest = buildEmotionRequest(voice.engine, speech.emotion, voice.voiceId);
+        const request = Object.assign({ engine: voice.engine, voiceId: voice.voiceId, resourceId: voice.resourceId || '', text: speech.text, emotion: speech.emotion, platform: voice.engine === 'minimax' ? ttsConfig.minimax.platform : '', model: voice.engine === 'minimax' ? ttsConfig.minimax.model : '' }, emotionRequest);
+        button.classList.add('eca-audio-loading'); button.textContent = '…'; currentAudioButton = button;
+        currentAudioState = { name: speech.name, text: speech.text, phase: 'loading' };
+        const seq = ++audioRequestSeq;
+        getOrCreateAudio(speech.text, request).then(function (result) {
+            if (seq !== audioRequestSeq) return;
+            const audio = new topWindow.Audio();
+            const url = (topWindow.URL || URL).createObjectURL(result.blob);
+            currentAudio = audio; currentAudioUrl = url;
+            currentAudioState = { name: speech.name, text: speech.text, phase: 'playing' };
+            audio.src = url; audio.preload = 'auto';
+            if (currentAudioButton) { currentAudioButton.classList.remove('eca-audio-loading'); currentAudioButton.classList.add('eca-audio-playing'); currentAudioButton.textContent = '■'; }
+            audio.onended = function () { if (currentAudio === audio) stopCurrentAudio(); };
+            audio.onerror = function () { if (currentAudio === audio) { stopCurrentAudio(); toast('音频播放失败，请重试', true); } };
+            const playResult = audio.play();
+            if (playResult && typeof playResult.catch === 'function') playResult.catch(function () { if (currentAudio === audio) { stopCurrentAudio(); toast('浏览器阻止了音频播放，请再次点击', true); } });
+        }).catch(function (error) {
+            if (seq !== audioRequestSeq) return;
+            stopCurrentAudio();
+            toast('语音生成失败：' + (error && error.message || error) + '（可重试）', true);
+        });
+    }
+
+    function positionAudioButton(button, avatar, container) {
+        const ar = avatar.getBoundingClientRect();
+        const rr = container.getBoundingClientRect();
+        button.style.left = (ar.left - rr.left + ar.width - 2) + 'px';
+        button.style.top = (ar.top - rr.top + 2) + 'px';
+    }
+
+    function syncAudioButtons(root) {
+        const scope = root || doc;
+        const old = scope.querySelector('.eca-audio-overlay');
+        if (old) old.remove();
+        if (!settings.ttsEnabled) return;
+        const mes = scope.closest && scope.closest('.mes');
+        if (!mes || mes.classList.contains('is_user')) return;
+        const avatars = Array.prototype.slice.call(scope.querySelectorAll('.eca-avatar:not(.eca-placeholder)'));
+        if (!avatars.length) return;
+        const overlay = doc.createElement('div');
+        overlay.className = 'eca-audio-overlay';
+        const positionParent = scope;
+        if (topWindow.getComputedStyle(positionParent).position === 'static') positionParent.style.position = 'relative';
+        let buttonCount = 0;
+        avatars.forEach(function (avatar, index) {
+            const speech = getAvatarSpeech(avatar);
+            if (!speech) return;
+            const button = doc.createElement('button');
+            button.type = 'button'; button.className = 'eca-audio-btn'; button.textContent = '🔊';
+            button.title = '播放「' + speech.name + '」对白'; button.setAttribute('aria-label', button.title);
+            button.dataset.ecaAudioName = speech.name;
+            button.dataset.ecaAudioIndex = String(index);
+            // 头像元素可能在流式期间被整体替换，点击时按序号取当前文档里的活元素
+            button.addEventListener('click', function (event) {
+                event.preventDefault(); event.stopPropagation();
+                const list = positionParent.querySelectorAll('.eca-avatar:not(.eca-placeholder)');
+                const live = list[Number(button.dataset.ecaAudioIndex)] || avatar;
+                playAvatarSpeech(button, live);
+            });
+            applyAudioStateToButton(button, speech);
+            overlay.appendChild(button);
+            positionAudioButton(button, avatar, positionParent);
+            buttonCount++;
+        });
+        if (buttonCount) positionParent.appendChild(overlay);
+    }
+
+    function refreshAudioButtons() {
+        doc.querySelectorAll('.mes_text').forEach(function (root) { syncAudioButtons(root); });
+    }
+
     const CSS_TEXT = ''
         + '.eca-avatar{display:inline-block;height:var(--eca-size,2.5em);width:auto;'
         + 'max-width:calc(var(--eca-size,2.5em)*1.6);object-fit:cover;vertical-align:text-bottom;'
         + 'margin:0 .18em;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.15),0 0 0 1px rgba(120,95,60,.22);}'
+        + '.eca-audio-overlay{position:absolute;inset:0;z-index:6;pointer-events:none;}'
+        + '.eca-audio-btn{position:absolute;pointer-events:auto;width:24px;height:24px;padding:0;border:1px solid rgba(255,255,255,.8);border-radius:50%;background:rgba(45,34,24,.82);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font:14px/1 system-ui,sans-serif;box-shadow:0 1px 5px rgba(0,0,0,.35);transform:translate(25%,-25%);}'
+        + '.eca-audio-btn:hover{background:#9c7138;}'
+        + '.eca-audio-btn.eca-audio-loading{animation:eca-audio-pulse 1s linear infinite;}'
+        + '.eca-audio-btn.eca-audio-playing{background:#943325;}'
+        + '@keyframes eca-audio-pulse{50%{opacity:.45;}}'
         // 占位符不可在自身上改 font-size：height 的 em 会按放大后的字号解析，导致尺寸超标
         + '.eca-avatar.eca-placeholder{width:var(--eca-size,2.5em);height:var(--eca-size,2.5em);'
         + 'max-width:none;box-sizing:border-box;display:inline-flex;align-items:center;'
@@ -527,6 +1093,7 @@
         syncRenderedAvatars(root);
         splitMidParagraphAvatarLines(root);
         wrapLeadingAvatarParagraphs(root);
+        syncAudioButtons(root);
         if (debugOn) {
             dbg('scanRoot：实际替换标签 ' + (dbgReplaced - before) + ' 个，拆段 ' + (dbgSplit - beforeSplit) + ' 个，耗时 ' + (dbgNow() - t0).toFixed(1) + 'ms，楼层现有头像元素 ' + root.querySelectorAll('.eca-avatar').length + ' 个');
         }
@@ -718,6 +1285,8 @@
         if (generationStarted) Env.on(generationStarted, onGenerationStarted);
         const appReady = Env.events.APP_READY;
         if (appReady) Env.on(appReady, function () { addMenuButton(); scheduleScan(); });
+        const resize = topWindow.addEventListener;
+        if (resize) topWindow.addEventListener('resize', refreshAudioButtons);
         // CHAT_CHANGED：注入只对当前聊天有效，切聊天必须重注；同时全扫恢复渲染
         const chatChanged = Env.events.CHAT_CHANGED;
         if (chatChanged) {
@@ -1173,6 +1742,114 @@
         doc.head.appendChild(style);
     }
 
+    function ensureAudioPanelStyles() {
+        if (doc.getElementById('eca-audio-panel-styles')) return;
+        const style = doc.createElement('style');
+        style.id = 'eca-audio-panel-styles';
+        style.textContent = '#eca-audio-settings,#eca-voice-settings,#eca-cache-panel{display:none;position:absolute;inset:0;z-index:100004;background:rgba(18,13,8,.7);align-items:flex-start;justify-content:center;padding:4vh 0;box-sizing:border-box;font:13px system-ui,"Segoe UI","Microsoft YaHei",sans-serif;overflow-y:auto;}'
+            + '#eca-audio-settings .eca-audio-modal,#eca-voice-settings .eca-audio-modal,#eca-cache-panel .eca-audio-modal{width:min(760px,94vw);max-height:calc(100dvh - 8vh);display:flex;flex-direction:column;background:#f5f0e3;background-image:linear-gradient(145deg,#fbf7ee,#ecdfc7);color:#493725;border:1px solid #cdbea2;border-radius:12px;box-shadow:0 20px 60px rgba(35,22,10,.45);overflow:hidden;} '
+            + '.eca-audio-head{display:flex;align-items:center;justify-content:space-between;padding:11px 18px;border-bottom:1px solid #ded2bd;background:rgba(246,238,222,.7);font-weight:700;color:#2b1f13;font-family:"STSong","Songti SC",serif;font-size:15px;} '
+            + '.eca-audio-head button{background:none;border:0;color:#7d6b56;font-size:18px;cursor:pointer;} .eca-audio-body{padding:14px 18px;overflow-y:auto;min-height:0;} '
+            + '.eca-audio-section{border:1px solid #ded2bd;border-radius:7px;padding:10px 12px;margin-bottom:10px;background:rgba(251,247,238,.72);} .eca-audio-section h4{margin:0 0 8px;color:#2b1f13;} '
+            + '.eca-audio-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:7px 0;} .eca-audio-row label{min-width:92px;color:#6d5b46;} '
+            + '.eca-audio-row input,.eca-audio-row select{flex:1 1 180px;min-width:0;padding:5px 7px;border:1px solid #b8a584;border-radius:5px;background:#fffdf8;color:#2b1f13;box-sizing:border-box;} '
+            + '.eca-audio-row input[type=checkbox]{flex:0 0 auto;min-width:auto;} .eca-audio-tip{font-size:12px;color:#7d6b56;line-height:1.5;margin:6px 0;} '
+            + '.eca-audio-footer{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #ded2bd;background:rgba(244,235,218,.8);} '
+            + '.eca-audio-footer button,.eca-cache-action{padding:5px 12px;border:1px solid #b8a584;border-radius:5px;background:#fcf8f0;color:#493725;cursor:pointer;} .eca-audio-footer .primary{background:#ebe0c8;border-color:#c3984d;font-weight:600;} '
+            + '.eca-cache-list{display:flex;flex-direction:column;gap:6px;} .eca-cache-item{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ded2bd;border-radius:6px;background:#fffdf8;} .eca-cache-meta{flex:1;min-width:0;} .eca-cache-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2b1f13;} .eca-cache-sub{font-size:11px;color:#7d6b56;margin-top:3px;} .eca-cache-item button{flex:0 0 auto;} '
+            + '@media(max-width:640px){#eca-audio-settings,#eca-voice-settings,#eca-cache-panel{padding:3vh 0;} .eca-audio-modal{width:96vw!important;max-height:calc(100dvh - 6vh)!important;}}';
+        doc.head.appendChild(style);
+    }
+
+    function setTtsEnabled(enabled) {
+        settings.ttsEnabled = !!enabled;
+        persistSettings();
+        if (!settings.ttsEnabled) stopCurrentAudio();
+        refreshAudioButtons();
+        syncPanelControls();
+    }
+
+    function audioModal(id, title, body, footer) {
+        ensureAudioPanelStyles();
+        let root = doc.getElementById(id);
+        if (root) root.remove();
+        root = doc.createElement('div'); root.id = id;
+        root.innerHTML = '<div class="eca-audio-modal"><div class="eca-audio-head"><span>' + title + '</span><button type="button" data-audio-close>×</button></div><div class="eca-audio-body">' + body + '</div><div class="eca-audio-footer">' + footer + '</div></div>';
+        root.addEventListener('click', function (ev) {
+            if (ev.target === root || ev.target.hasAttribute('data-audio-close')) { root.style.display = 'none'; return; }
+        });
+        doc.body.appendChild(root);
+        root.style.display = 'flex';
+        return root;
+    }
+
+    function openVoiceSettings(name) {
+        if (!name) return;
+        const current = getVoiceConfig(name) || { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural', resourceId: '' };
+        const options = EDGE_VOICES.map(function (voice) { return '<option value="' + escapeHtml(voice.id) + '"' + (current.voiceId === voice.id ? ' selected' : '') + '>' + escapeHtml(voice.name + ' · ' + voice.id) + '</option>'; }).join('');
+        const body = '<div class="eca-audio-tip">别名会继承主角色的配置。Edge 可直接使用；MiniMax/豆包需要在音频设置中填写凭据。自定义情绪会按引擎能力降级或传入语音指令。</div>'
+            + '<div class="eca-audio-row"><label>引擎</label><select id="eca-voice-engine"><option value="edge"' + (current.engine === 'edge' ? ' selected' : '') + '>Edge（免费）</option><option value="minimax"' + (current.engine === 'minimax' ? ' selected' : '') + '>MiniMax</option><option value="doubao"' + (current.engine === 'doubao' ? ' selected' : '') + '>豆包</option></select></div>'
+            + '<div class="eca-audio-row"><label>Edge 音色</label><select id="eca-edge-voice">' + options + '</select></div>'
+            + '<div class="eca-audio-row"><label>音色 ID</label><input id="eca-voice-id" value="' + escapeHtml(current.voiceId || '') + '" placeholder="MiniMax voice_id / 豆包 speaker"></div>'
+            + '<div class="eca-audio-row"><label>豆包 Resource ID</label><input id="eca-resource-id" value="' + escapeHtml(current.resourceId || '') + '" placeholder="如 seed-tts-2.0"></div>';
+        const root = audioModal('eca-voice-settings', '语音设置 · ' + escapeHtml(name), body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-voice-save">保存</button>');
+        const engine = root.querySelector('#eca-voice-engine');
+        const edgeSelect = root.querySelector('#eca-edge-voice');
+        const voiceInput = root.querySelector('#eca-voice-id');
+        const syncVoiceUi = function () { edgeSelect.disabled = engine.value !== 'edge'; if (engine.value === 'edge') voiceInput.value = edgeSelect.value; };
+        edgeSelect.addEventListener('change', syncVoiceUi); engine.addEventListener('change', syncVoiceUi); syncVoiceUi();
+        root.querySelector('#eca-voice-save').addEventListener('click', function () {
+            const value = { engine: engine.value, voiceId: String(voiceInput.value || '').trim(), resourceId: root.querySelector('#eca-resource-id').value.trim() };
+            if (!value.voiceId || (value.engine === 'doubao' && !value.resourceId)) { toast('请填写音色 ID；豆包还需要 Resource ID', true); return; }
+            setVoiceConfig(name, value); root.style.display = 'none'; refreshAudioButtons(); toast('已保存「' + name + '」的语音配置');
+        });
+    }
+
+    function openTtsSettings() {
+        const c = ttsConfig;
+        const body = '<div class="eca-audio-tip">凭据独立保存在情绪头像的 localStorage 中，不读取 st-immersive-sound。Edge 默认代理为 HTTPS 地址；文本会发送到你配置的代理服务。</div>'
+            + '<div class="eca-audio-section"><h4>Edge</h4><div class="eca-audio-row"><label>HTTPS 代理</label><input id="eca-edge-proxy" value="' + escapeHtml(c.edge.proxyUrl) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-edge-persist"' + (c.edge.persist ? ' checked' : '') + '><span>默认关闭（仅内存缓存）</span></div></div>'
+            + '<div class="eca-audio-section"><h4>MiniMax</h4><div class="eca-audio-row"><label>API Key</label><input type="password" id="eca-mm-key" value="' + escapeHtml(c.minimax.apiKey) + '"></div><div class="eca-audio-row"><label>平台</label><select id="eca-mm-platform"><option value="cn"' + (c.minimax.platform === 'cn' ? ' selected' : '') + '>国内</option><option value="io"' + (c.minimax.platform === 'io' ? ' selected' : '') + '>国际</option></select></div><div class="eca-audio-row"><label>模型</label><input id="eca-mm-model" value="' + escapeHtml(c.minimax.model) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-mm-persist"' + (c.minimax.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
+            + '<div class="eca-audio-section"><h4>豆包</h4><div class="eca-audio-row"><label>App ID</label><input id="eca-db-app" value="' + escapeHtml(c.doubao.appId) + '"></div><div class="eca-audio-row"><label>Access Key</label><input type="password" id="eca-db-key" value="' + escapeHtml(c.doubao.accessKey) + '"></div><div class="eca-audio-row"><label>UID</label><input id="eca-db-uid" value="' + escapeHtml(c.doubao.uid) + '"></div><div class="eca-audio-row"><label>持久化</label><input type="checkbox" id="eca-db-persist"' + (c.doubao.persist ? ' checked' : '') + '><span>默认开启</span></div></div>'
+            + '<div class="eca-audio-section"><h4>缓存清理</h4><div class="eca-audio-row"><label>保留天数</label><input type="number" id="eca-cache-days" min="1" value="' + c.cacheDays + '"><label>最大条数</label><input type="number" id="eca-cache-count" min="1" value="' + c.cacheMaxEntries + '"><label>最大 MB</label><input type="number" id="eca-cache-mb" min="1" value="' + c.cacheMaxMb + '"></div></div>';
+        const root = audioModal('eca-audio-settings', '音频设置', body, '<button type="button" data-audio-close>取消</button><button type="button" class="primary" id="eca-tts-save">保存</button>');
+        root.querySelector('#eca-tts-save').addEventListener('click', function () {
+            c.edge.proxyUrl = root.querySelector('#eca-edge-proxy').value.trim(); c.edge.persist = root.querySelector('#eca-edge-persist').checked;
+            c.minimax.apiKey = root.querySelector('#eca-mm-key').value.trim(); c.minimax.platform = root.querySelector('#eca-mm-platform').value; c.minimax.model = root.querySelector('#eca-mm-model').value.trim(); c.minimax.persist = root.querySelector('#eca-mm-persist').checked;
+            c.doubao.appId = root.querySelector('#eca-db-app').value.trim(); c.doubao.accessKey = root.querySelector('#eca-db-key').value.trim(); c.doubao.uid = root.querySelector('#eca-db-uid').value.trim(); c.doubao.persist = root.querySelector('#eca-db-persist').checked;
+            c.cacheDays = Math.max(1, Number(root.querySelector('#eca-cache-days').value) || 30); c.cacheMaxEntries = Math.max(1, Number(root.querySelector('#eca-cache-count').value) || 200); c.cacheMaxMb = Math.max(1, Number(root.querySelector('#eca-cache-mb').value) || 512);
+            persistTtsConfig(); pruneTtsCache(); root.style.display = 'none'; toast('音频设置已保存');
+        });
+    }
+
+    function formatBytes(size) { if (size < 1024) return size + ' B'; if (size < 1048576) return (size / 1024).toFixed(1) + ' KB'; return (size / 1048576).toFixed(1) + ' MB'; }
+
+    function openTtsCachePanel() {
+        ttsGetAll().then(function (records) {
+            records.sort(function (a, b) { return b.createdAt - a.createdAt; });
+            const rows = records.length ? records.map(function (record) {
+                const id = 'eca-cache-' + (audioEntrySeq++); audioEntries.set(id, record);
+                return '<div class="eca-cache-item"><div class="eca-cache-meta"><div class="eca-cache-text" title="' + escapeHtml(record.text) + '">' + escapeHtml(record.text) + '</div><div class="eca-cache-sub">' + escapeHtml(record.engine) + ' · ' + escapeHtml(record.voiceId) + ' · ' + formatBytes(record.size || record.blob.size) + ' · ' + new Date(record.createdAt).toLocaleString() + '</div></div><button class="eca-cache-action" data-cache-play="' + id + '">▶</button><button class="eca-cache-action" data-cache-download="' + id + '">⬇</button><button class="eca-cache-action" data-cache-delete="' + id + '">✕</button></div>';
+            }).join('') : '<div class="eca-audio-tip">暂无持久化音频。</div>';
+            const root = audioModal('eca-cache-panel', '语音缓存', '<div class="eca-audio-tip">共 ' + records.length + ' 条，Edge 默认不写入这里。</div><div class="eca-cache-list">' + rows + '</div>', '<button type="button" id="eca-cache-prune">清理过期</button><button type="button" id="eca-cache-clear">清空全部</button><button type="button" data-audio-close>关闭</button>');
+            root.addEventListener('click', function (ev) {
+                const play = ev.target.closest && ev.target.closest('[data-cache-play]');
+                const download = ev.target.closest && ev.target.closest('[data-cache-download]');
+                const del = ev.target.closest && ev.target.closest('[data-cache-delete]');
+                if (play || download || del) {
+                    const record = audioEntries.get((play || download || del).dataset[play ? 'cachePlay' : download ? 'cacheDownload' : 'cacheDelete']);
+                    if (!record) return;
+                    if (play) { stopCurrentAudio(); const audio = new topWindow.Audio(); const url = (topWindow.URL || URL).createObjectURL(record.blob); currentAudio = audio; currentAudioUrl = url; currentAudioButton = null; audio.src = url; audio.onended = function () { if (currentAudio === audio) stopCurrentAudio(); }; audio.play().catch(function () { stopCurrentAudio(); }); }
+                    else if (download) { const url = (topWindow.URL || URL).createObjectURL(record.blob); const a = doc.createElement('a'); a.href = url; a.download = '情绪头像-' + String(record.voiceId || 'audio').replace(/[^\w\-一-龥]+/g, '_') + '.' + (record.mime && record.mime.indexOf('wav') !== -1 ? 'wav' : 'mp3'); a.click(); setTimeout(function () { (topWindow.URL || URL).revokeObjectURL(url); }, 1000); }
+                    else { ttsDelete(record.key).then(function () { ttsMemoryCache.delete(record.key); root.style.display = 'none'; openTtsCachePanel(); }); }
+                }
+            });
+            root.querySelector('#eca-cache-prune').addEventListener('click', function () { pruneTtsCache().then(function () { root.style.display = 'none'; openTtsCachePanel(); }); });
+            root.querySelector('#eca-cache-clear').addEventListener('click', function () { if (uiConfirm('清空全部持久化语音缓存？')) ttsClear().then(function () { ttsMemoryCache.clear(); root.style.display = 'none'; openTtsCachePanel(); }); });
+        }).catch(function (e) { toast('读取语音缓存失败：' + (e.message || e), true); });
+    }
+
+
     function escapeHtml(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1234,6 +1911,8 @@
         rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === name) selectedCharacter = characters[0] || null;
+        delete voiceMap[name];
+        persistVoiceMap();
         applyInjection();
         return deleteCharacterAvatars(name).then(function () { return true; });
     }
@@ -1253,6 +1932,11 @@
             persistAliases();
         }
         group.members[group.members.indexOf(oldName)] = newName;
+        if (voiceMap[oldName]) {
+            voiceMap[newName] = voiceMap[oldName];
+            delete voiceMap[oldName];
+            persistVoiceMap();
+        }
         rebuildCharacterIndex();
         persistCharacters();
         if (selectedCharacter === oldName) selectedCharacter = newName;
@@ -1425,11 +2109,14 @@
             + '    <div class="eca-footer-divider"></div>'
             + '    <div class="eca-footer-right eca-footer-actions">'
             + '      <label class="eca-switch" title="开启后将头像标记规则注入酒馆上下文"><input type="checkbox" id="eca-enabled"> 启用提示词注入</label>'
+            + '      <label class="eca-switch" title="显示或隐藏 AI 楼层头像上的独立语音按钮"><input type="checkbox" id="eca-tts-enabled"> 启用语音按钮</label>'
             + '      <div class="eca-size"><span>头像大小</span>'
             + '        <input type="range" id="eca-size-range" min="1.5" max="5" step="0.1">'
             + '        <span class="eca-size-val" id="eca-size-val"></span></div>'
             + '      <label class="eca-switch" title="输出完成后统一替换头像，流式闪烁时使用"><input type="checkbox" id="eca-delay-render"> 延时渲染</label>'
             + '      <label class="eca-switch" title="勾选切为顶端首行平齐，不勾选为垂直居中"><input type="checkbox" id="eca-top-align"> 置顶</label>'
+            + '      <button class="eca-add eca-add-group" id="eca-tts-settings-btn" title="配置三种语音引擎">音频设置</button>'
+            + '      <button class="eca-add eca-add-group" id="eca-cache-btn" title="管理持久化语音">语音缓存</button>'
             + '      <button class="eca-add eca-add-char" id="eca-diag-btn" title="生成无控制台排障报告">⚙ 排障</button>'
             + '    </div>'
             + '  </div>'
@@ -1478,6 +2165,12 @@
             if (aliasBtn) { aliasFlow(selectedCharacter); return; }
             const batch = target.closest ? target.closest('#eca-batch-btn') : null;
             if (batch) { openBatchDialog(selectedCharacter); return; }
+            const voiceBtn = target.closest ? target.closest('#eca-voice-btn') : null;
+            if (voiceBtn) { openVoiceSettings(selectedCharacter); return; }
+            const ttsSettingsBtn = target.closest ? target.closest('#eca-tts-settings-btn') : null;
+            if (ttsSettingsBtn) { openTtsSettings(); return; }
+            const cacheBtn = target.closest ? target.closest('#eca-cache-btn') : null;
+            if (cacheBtn) { openTtsCachePanel(); return; }
             // 组头点击：折叠/展开（点名字区域或箭头）
             const head = target.closest ? target.closest('.eca-group-head') : null;
             if (head) {
@@ -1607,6 +2300,11 @@
             setTopAlign(topAlignCb.checked);
             toast(topAlignCb.checked ? '已切换为顶端首行平齐' : '已切换为垂直居中');
         });
+        const ttsCb = root.querySelector('#eca-tts-enabled');
+        ttsCb.addEventListener('change', function () {
+            setTtsEnabled(ttsCb.checked);
+            toast(ttsCb.checked ? '语音按钮已开启' : '语音按钮已关闭');
+        });
         const diagBtn = root.querySelector('#eca-diag-btn');
         if (diagBtn) diagBtn.addEventListener('click', openDiagDialog);
     }
@@ -1615,6 +2313,8 @@
         if (!panelEl) return;
         const cb = panelEl.querySelector('#eca-enabled');
         if (cb) cb.checked = settings.enabled;
+        const ttsCb = panelEl.querySelector('#eca-tts-enabled');
+        if (ttsCb) ttsCb.checked = settings.ttsEnabled !== false;
         const delayRenderCb = panelEl.querySelector('#eca-delay-render');
         if (delayRenderCb) delayRenderCb.checked = !!settings.delayRender;
         const topAlignCb = panelEl.querySelector('#eca-top-align');
@@ -1686,6 +2386,7 @@
                 ? '；其它姓名：' + escapeHtml(aliases[selectedCharacter].join('、')) : '';
             detail.innerHTML = ''
                 + '<div class="eca-detail-head"><b>' + escapeHtml(selectedCharacter) + '</b>'
+                + '<button class="eca-mini-btn" id="eca-voice-btn">语音设置</button>'
                 + '<button class="eca-mini-btn" id="eca-batch-btn">批量导入大图</button>'
                 + '<button class="eca-mini-btn" id="eca-rename-btn">改名</button>'
                 + '<button class="eca-mini-btn" id="eca-alias-btn">多姓名</button></div>'
@@ -2266,6 +2967,17 @@
         setSize: setSize,
         setTopAlign: setTopAlign,
         setDelayRender: setDelayRender,
+        setTtsEnabled: setTtsEnabled,
+        getTtsConfig() { return JSON.parse(JSON.stringify(ttsConfig)); },
+        setTtsConfig(config) { ttsConfig = mergeTtsConfig(config); persistTtsConfig(); return JSON.parse(JSON.stringify(ttsConfig)); },
+        getVoiceConfig: getVoiceConfig,
+        setVoiceConfig: setVoiceConfig,
+        extractQuotedText: extractQuotedText,
+        getAvatarSpeech: getAvatarSpeech,
+        refreshAudioButtons: refreshAudioButtons,
+        getTtsCache: ttsGetAll,
+        clearTtsCache: function () { ttsMemoryCache.clear(); return ttsClear(); },
+        clearTtsMemory: function () { ttsMemoryCache.clear(); },
         scanAll: scanAll,
         applyInjection: applyInjection,
         /* 存储层桥（面板与 harness 共用） */

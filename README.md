@@ -53,6 +53,22 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 - 注入只对当前聊天有效：切换聊天、修改登记名单时自动重注；面板总开关关闭即撤销；停用脚本自动撤销
 - 标签保留在上下文中（约 10 token/段）——这是特性：AI 看到自己历史输出里的标签，格式一致性更强
 
+## 头像语音按钮
+
+每个**真实头像**（非占位）右上角有一个独立语音按钮：只朗读**该头像自己那一段**引号内的对白，不跨段、不读旁白、不调用任何 LLM。
+
+- **提取规则**：只认完整闭合的双引号对（`“…”`、`"…"`、`「…」`、`『…』`、`«…»`）；单引号 `‘…’` 只作为外层引号内的嵌套标点。同一段里被旁白打断的多句对白按原文顺序合并为**一次**合成请求，旁白文本不发送。无完整引号的段落不显示按钮。
+- **楼层范围**：仅 AI 楼层；用户楼层即使手写标签也不显示按钮。同一段出现两个头像时（如 `{A(微笑)}“甲。”{B(愤怒)}“乙。”`），两个头像各有自己的按钮，各取自己的台词。
+- **播放**：点击开始合成（按钮转圈）→ 播放（按钮变方块）→ 再点停止；点击另一个按钮会先停掉当前播放。只有用户点击才发起请求，不自动播放、不监听新消息。
+- **角色音色**：在面板选中角色 → 「语音设置」里为该角色选择引擎与音色（别名自动继承主角色的配置）。未配置音色的角色点按钮会提示先去配置。
+- **引擎与情绪**（情绪取自 `{角色(情绪)}` 标签，均不读进正文）：
+  - **Edge**（免费，默认引擎）：情绪映射到该音色支持的 `style`；无法表达的（如自定义情绪）回落到 `general`。文本经 HTTPS 代理合成，默认代理可在「音频设置」里替换。
+  - **MiniMax**：固定情绪映射到官方枚举（微笑→happy、愤怒→angry、悲伤→sad、惊讶→surprised、轻蔑→disgusted、思考→calm、大笑→happy、杀意→angry）；无法映射的情绪不发送情绪参数，由模型按文本自然处理。
+  - **豆包**：情绪（含自定义情绪）作为独立语音指令放在 `additions.context_texts`，例如「请用“杀意”的语气朗读这段话。」——支持任意中文情绪词，且不会朗读指令本身。
+  - 失败只提示重试，不自动切换引擎或音色。
+- **持久化缓存**：Edge 默认不落盘（仅当前页面内存缓存）；MiniMax / 豆包默认落盘到 IndexedDB，同引擎+同音色+同文本+同情绪再次播放直接回放，不再消耗合成额度。面板底栏「语音缓存」可查看条目、试听、下载、单条删除、清理过期与清空全部。默认保留 30 天 / 最多 200 条 / 最多 512MB，超出按最旧优先清理。
+- **开关**：面板底栏「启用语音按钮」总开关（默认开），关闭后按钮全部隐藏，音色配置与缓存不受影响。
+
 ## 数据存储
 
 | 数据 | 位置 | 说明 |
@@ -60,6 +76,9 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 | 头像图片（含自定义情绪图） | 浏览器 IndexedDB `EmotionAvatarDB` | 主键 `角色名_情绪`，全局角色库（不绑角色卡，换卡/群聊通用） |
 | 登记名单、分组、开关、尺寸、裁剪比例 | localStorage `emoavatar_groups` / `emoavatar_characters` / `emoavatar_settings` | |
 | 多姓名绑定（别名表） | localStorage `emoavatar_aliases` | 主名 → 其它姓名列表 |
+| 角色语音映射（引擎 / 音色 / Resource ID） | localStorage `emoavatar_tts_voices` | 按主名保存，别名自动继承；改名随迁、删除角色即清除 |
+| 语音引擎凭据与缓存策略 | localStorage `emoavatar_tts_config` | Edge 代理、MiniMax Key/平台/模型、豆包 App ID/Access Key、持久化开关与容量上限。**凭据为该脚本私有，不读取其他插件**，以明文存于浏览器，同源脚本理论上可读 |
+| 持久化语音音频 | 浏览器 IndexedDB `EmotionAvatarTtsDB` | 按「引擎+平台/模型/Resource ID+音色+正文+最终情绪参数」为键；Edge 默认不写入 |
 
 头像显示大小：面板底部滑条（1.5–5em），即时生效，已渲染楼层无需重扫。
 
@@ -67,7 +86,12 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 已知限制
 
-- **TTS 会朗读标签原文**（酒馆 TTS 读消息原文，插件无法拦截）
+- **TTS 会朗读标签原文**（酒馆 TTS 读消息原文，插件无法拦截；本脚本自己的语音按钮只读引号内对白，不含标签）
+- 语音按钮的**情绪变化精度按引擎递减**：豆包可表达任意中文情绪，MiniMax 只能落到固定枚举，Edge 只能映射到音色支持的 style（无对应项即 `general`）——Edge 是降级引擎，不是等价实现
+- **MiniMax / 豆包为浏览器直连**：受服务商 CORS 策略与网络环境影响，被拦截时界面提示请求失败（不会偷偷改走代理或换引擎）
+- **Edge 走第三方 HTTPS 代理**：点击按钮会把该段对白文本发送到所配置的代理地址，可在「音频设置」中替换为自己的服务
+- 凭据以明文存放在浏览器 localStorage，同源脚本可读取；请勿在共享环境中使用
+- 播放状态在楼层重渲染后会自动恢复（按角色+文本匹配），但**同一句对白在同一楼层多个头像上出现时**仅保留一个播放态
 - 图片库在浏览器 IndexedDB：清浏览器数据 / 换浏览器会丢（暂无导出导入，可后续加）
 - 批量导入仅支持**均匀网格**的合集图；带间距、不等分、斜排的图请退回单格上传
 - 单花括号与酒馆宏（`{{}}`）、markdown 无冲突；开启 LaTeX 渲染的极端环境理论上可能干扰
@@ -75,20 +99,23 @@ SillyTavern 酒馆助手（TavernHelper / JS-Slash-Runner）轻量脚本：AI �
 
 ## 卸载与清理
 
-- 停用/删除脚本 = 楼层回到原始文本（标签以普通文字显示），提示词注入自动撤销
+- 停用/删除脚本 = 楼层回到原始文本（标签以普通文字显示），提示词注入自动撤销，语音按钮与覆盖层一并消失
 - 彻底清理素材：控制台执行
   ```js
   indexedDB.deleteDatabase('EmotionAvatarDB');
+  indexedDB.deleteDatabase('EmotionAvatarTtsDB');
   localStorage.removeItem('emoavatar_characters');
   localStorage.removeItem('emoavatar_settings');
   localStorage.removeItem('emoavatar_groups');
   localStorage.removeItem('emoavatar_aliases');
+  localStorage.removeItem('emoavatar_tts_voices');
+  localStorage.removeItem('emoavatar_tts_config');
   ```
 
 ## 开发与测试
 
-- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM），75 个用例覆盖渲染、容错、流式实时渲染（含生成期同帧渲染 M1-18、连续变更节流 M1-17）与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、标签行拆段（M9，含真机单换行形态 M9-1、后续行排除出右列 M9-6、长台词保留 M9-8、多行连续无残留 M9-9、真实酒馆渲染管线端到端 M9-5）、面板内排障诊断（M4-13）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）
-- 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行）
+- `integration-test/harness.html`：mock 酒馆环境的回归测试页（stub `eventOn` / `injectPrompts` / 假楼层 DOM / 假 `fetch` 与假 `Audio`），87 个用例覆盖渲染、容错、流式实时渲染（含生成期同帧渲染 M1-18、连续变更节流 M1-17）与延时兜底、头像缓存回写、两列布局（含默认垂直居中 M1-11、置顶开关 M1-12、移动端 CSS M4-11）、标签行拆段（M9，含真机单换行形态 M9-1、后续行排除出右列 M9-6、长台词保留 M9-8、多行连续无残留 M9-9、真实酒馆渲染管线端到端 M9-5）、面板内排障诊断（M4-13）、注入、存储、面板、多选导入、批量导入、分组管理、自定义情绪（M7）、多姓名绑定（M8）、头像语音（M10，含引号提取、归属边界、三引擎请求体、情绪映射、持久化命中、失败不换引擎、面板入口）
+- 本地跑法：项目目录起静态服务（`python -m http.server 8123`）后访问 `http://127.0.0.1:8123/integration-test/harness.html`，点「运行全部断言」（IndexedDB 需 http 环境，file:// 不行；端口被占用时换一个并相应改 URL）
 - `node --check emotion-avatar.js` 语法校验
 - 无控制台排障：酒馆魔法棒 → 情绪头像 → 面板底栏「⚙ 排障」按钮，弹窗内直接生成可复制报告（脚本状态 / 消息样式表 / 事件缺失 / 头像替换 / 头像父元素分布 / 楼层 DOM 结构摘要 / `:has()` 兼容性 / 计算样式 / 结论判定），手机上无需打开控制台即可把报告发回。
 - 排障打标（默认关闭，不改行为）：控制台 `EmoAvatar.setDebug(true)` 打开判定链日志（前缀 `[ECA-DBG`）；`EmoAvatar.debugStatus()` 取状态快照（delayRender / generationActive / 脏标记 / 各定时器）；`EmoAvatar.debugLogs()` 取环形缓冲日志（控制台抓不到 iframe 日志时用）；`EmoAvatar.setDebug(false)` 关闭。开关持久化在 localStorage `emoavatar_debug`

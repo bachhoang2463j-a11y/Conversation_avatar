@@ -134,6 +134,90 @@ function __btn(label, fn, warn) {
   document.getElementById('actions').appendChild(b);
   return b;
 }
+
+/* ============================================================
+ * TTS 桩：假 fetch + 假 Audio（不触网，只记录请求体供断言）
+ * ============================================================ */
+window.__fetchCalls = [];
+window.__fetchMode = 'ok';
+window.__fakeAudioBytes = [73, 68, 51, 4, 0, 0, 0, 0];
+function __audioBlob() { return new Blob([new Uint8Array(window.__fakeAudioBytes)], { type: 'audio/mpeg' }); }
+window.fetch = function (url, options) {
+  var opts = options || {};
+  var rec = { url: String(url), method: opts.method || 'GET', headers: opts.headers || {}, body: null };
+  if (opts.body) {
+    try { rec.body = typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body; }
+    catch (e) { rec.body = opts.body; }
+  }
+  window.__fetchCalls.push(rec);
+  var u = String(url);
+  if (window.__fetchMode === 'fail') {
+    return Promise.resolve({
+      ok: false, status: 500,
+      headers: { get: function () { return null; } },
+      blob: function () { return Promise.resolve(new Blob()); },
+      json: function () { return Promise.resolve({}); },
+      text: function () { return Promise.resolve('server error'); },
+    });
+  }
+  if (u.indexOf('/t2a_v2') !== -1) {
+    return Promise.resolve({
+      ok: true, status: 200,
+      headers: { get: function () { return 'application/json'; } },
+      json: function () { return Promise.resolve({ base_resp: { status_code: 0 }, data: { audio: '49443304' }, extra_info: {} }); },
+    });
+  }
+  if (u.indexOf('openspeech.bytedance.com') !== -1) {
+    var b64 = btoa(String.fromCharCode.apply(null, window.__fakeAudioBytes));
+    return Promise.resolve({
+      ok: true, status: 200,
+      headers: { get: function () { return 'application/json'; } },
+      text: function () { return Promise.resolve('{"code":0,"data":"' + b64 + '"}\n{"code":20000000}\n'); },
+    });
+  }
+  return Promise.resolve({
+    ok: true, status: 200,
+    headers: { get: function (k) { return String(k).toLowerCase() === 'content-type' ? 'audio/mpeg' : null; } },
+    blob: function () { return Promise.resolve(__audioBlob()); },
+  });
+};
+window.__audioInstances = [];
+window.__audioPlayCount = 0;
+window.Audio = function () {
+  var self = this;
+  this.src = ''; this.preload = ''; this.paused = true;
+  this.onended = null; this.onerror = null;
+  this.play = function () {
+    self.paused = false;
+    window.__audioPlayCount++;
+    window.__lastAudio = self;
+    return Promise.resolve();
+  };
+  this.pause = function () { self.paused = true; };
+  window.__audioInstances.push(this);
+};
+function __lastTtsCall(kind) {
+  for (var i = window.__fetchCalls.length - 1; i >= 0; i--) {
+    var u = window.__fetchCalls[i].url;
+    if (kind === 'edge' && u.indexOf('/tts?') !== -1) return window.__fetchCalls[i];
+    if (kind === 'minimax' && u.indexOf('/t2a_v2') !== -1) return window.__fetchCalls[i];
+    if (kind === 'doubao' && u.indexOf('openspeech.bytedance.com') !== -1) return window.__fetchCalls[i];
+  }
+  return null;
+}
+function __countTtsCalls(kind) {
+  return window.__fetchCalls.filter(function (c) {
+    if (kind === 'edge') return c.url.indexOf('/tts?') !== -1;
+    if (kind === 'minimax') return c.url.indexOf('/t2a_v2') !== -1;
+    if (kind === 'doubao') return c.url.indexOf('openspeech.bytedance.com') !== -1;
+    return false;
+  }).length;
+}
+function __edgeText(call) {
+  if (!call) return '';
+  var m = /[?&]t=([^&]*)/.exec(call.url);
+  return m ? decodeURIComponent(m[1]) : '';
+}
 </script>
 
 <script src="../emotion-avatar.js"></script>
@@ -165,7 +249,7 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.2.10', '版本不符：' + window.EmoAvatar.version);
+  assert(window.EmoAvatar.version === '0.3.0', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
@@ -1343,6 +1427,244 @@ test('M9-10 段内普通连续行之间的 <br> 保留（不误删）', function
   assert(ps[1].classList.contains('eca-p'), '标签行应两列');
   assert(ps[1].querySelectorAll('br').length === 0, '标签段切点 <br> 应删除');
   assert(ps[2].textContent.indexOf('叙述丙') !== -1 && !ps[2].classList.contains('eca-p'), '尾部叙述应独立成普通段');
+});
+
+/* ---------- M10 用例：逐头像语音按钮 ---------- */
+function __ttsReset() {
+  window.__fetchCalls = [];
+  window.__audioInstances = [];
+  window.__audioPlayCount = 0;
+  window.__fetchMode = 'ok';
+  window.EmoAvatar.setTtsEnabled(true);
+}
+function __buttons(mes) { return mes.querySelectorAll('.eca-audio-btn'); }
+test('M10-0 音频功能桥函数与设置项齐全（防插入事故）', function () {
+  var api = window.EmoAvatar;
+  ['setTtsEnabled', 'getTtsConfig', 'setTtsConfig', 'getVoiceConfig', 'setVoiceConfig',
+    'extractQuotedText', 'getAvatarSpeech', 'refreshAudioButtons', 'getTtsCache',
+    'clearTtsCache', 'clearTtsMemory'].forEach(function (key) {
+    assert(typeof api[key] === 'function', '调试桥缺少 ' + key);
+  });
+  var cfg = api.getTtsConfig();
+  assert(cfg.edge && typeof cfg.edge.proxyUrl === 'string', 'Edge 配置缺 proxyUrl');
+  assert(cfg.edge.persist === false, 'Edge 默认不应持久化');
+  assert(cfg.minimax.persist === true && cfg.doubao.persist === true, 'MiniMax/豆包默认应持久化');
+  assert(cfg.cacheDays === 30 && cfg.cacheMaxEntries === 200 && cfg.cacheMaxMb === 512, '缓存默认值与约定不符');
+});
+test('M10-1 引号提取：五种双引号、单引号只作嵌套、旁白不进请求', function () {
+  var ex = window.EmoAvatar.extractQuotedText;
+  assert(typeof ex === 'function', '调试桥缺少 extractQuotedText');
+  assert(ex('“甲。”').join('|') === '甲。', '中文弯引号失败');
+  assert(ex('"乙。"').join('|') === '乙。', '英文直引号失败');
+  assert(ex('「丙。」').join('|') === '丙。', '直角引号失败');
+  assert(ex('『丁。』').join('|') === '丁。', '双直角引号失败');
+  assert(ex('«戊»').join('|') === '戊', '法式引号失败');
+  assert(ex('他说‘马上来’。').length === 0, '单引号不应触发朗读');
+  assert(ex('“他说‘马上来’。”').join('|') === '他说‘马上来’。', '嵌套单引号应保留在外层内');
+  assert(ex('“你好。”他抬头说道，“最近好吗？”').join('\n') === '你好。\n最近好吗？', '旁白应被丢弃、多段应合并');
+  assert(ex('“没闭合').length === 0, '未闭合引号不应产出');
+  assert(ex('没有引号的旁白。').length === 0, '无引号不应产出');
+  var merged = window.EmoAvatar.extractQuotedText('“一。”<em>他说道</em>，“二。”');
+  assert(merged.join('\n') === '一。\n二。', '带行内元素时应按原顺序合并：' + JSON.stringify(merged));
+});
+test('M10-2 按钮只出现在 AI 楼层的真实头像且该段有完整引号', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var withQuote = __addFloor('<p>{弗兰克(微笑)}“走吧。”</p>', false);
+  var noQuote = __addFloor('<p>{弗兰克(微笑)}他沉默着。</p>', false);
+  var userFloor = __addFloor('<p>{弗兰克(微笑)}“我是用户输入的。”</p>', true);
+  var placeholder = __addFloor('<p>{路人甲(微笑)}“未登记。”</p>', false);
+  window.EmoAvatar.scanAll();
+  assert(__buttons(withQuote).length === 1, '有引号的 AI 楼层应有 1 个按钮，实际 ' + __buttons(withQuote).length);
+  assert(__buttons(noQuote).length === 0, '无引号的楼层不应有按钮');
+  assert(__buttons(userFloor).length === 0, '用户楼层不应有按钮');
+  assert(__buttons(placeholder).length === 0, '占位头像不应有按钮');
+  assert(withQuote.querySelector('.eca-audio-btn').title.indexOf('弗兰克') !== -1, '按钮提示应包含角色名');
+});
+test('M10-3 同段嵌套头像各自取自己的台词', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var mes = __addFloor('<p>{弗兰克(微笑)}“第一句。”{弗兰克(愤怒)}“第二句。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btns = __buttons(mes);
+  assert(btns.length === 2, '同段两个头像应各有一个按钮，实际 ' + btns.length);
+  var avatars = mes.querySelectorAll('.eca-avatar:not(.eca-placeholder)');
+  var first = window.EmoAvatar.getAvatarSpeech(avatars[0]);
+  var second = window.EmoAvatar.getAvatarSpeech(avatars[1]);
+  assert(first && first.text === '第一句。', '第一个头像文本错误：' + JSON.stringify(first && first.text));
+  assert(second && second.text === '第二句。', '第二个头像文本错误：' + JSON.stringify(second && second.text));
+});
+test('M10-4 不跨普通旁白段合并（每个按钮只管自己段落）', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var mes = __addFloor('<p>{弗兰克(微笑)}“甲。”</p><p>旁白里也有“乙”。</p>', false);
+  window.EmoAvatar.scanAll();
+  var btns = __buttons(mes);
+  assert(btns.length === 1, '只有带标签的段落才该有按钮，实际 ' + btns.length);
+  var avatar = mes.querySelector('.eca-avatar:not(.eca-placeholder)');
+  var speech = window.EmoAvatar.getAvatarSpeech(avatar);
+  assert(speech && speech.text === '甲。', '不应把旁白段的引号并进来：' + JSON.stringify(speech && speech.text));
+});
+test('M10-5 Edge：请求只含台词、情绪映射到 style、点击播放与再点停止', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ edge: { proxyUrl: 'https://example.invalid/tts', rate: 0, pitch: 0, volume: 100, persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  var mes = __addFloor('<p>{弗兰克(愤怒)}“你好。”他抬头说道，“最近好吗？”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  assert(btn, '缺少按钮');
+  btn.click();
+  return __wait(120).then(function () {
+    var call = __lastTtsCall('edge');
+    assert(call, '未发起 Edge 请求：' + JSON.stringify(window.__fetchCalls));
+    assert(__edgeText(call) === '你好。\n最近好吗？', '请求文本应为合并台词：' + JSON.stringify(__edgeText(call)));
+    assert(call.url.indexOf('v=zh-CN-YunxiNeural') !== -1, '音色参数错误：' + call.url);
+    assert(call.url.indexOf('s=angry') !== -1, '愤怒应映射到 angry：' + call.url);
+    assert(call.url.indexOf('{') === -1, '正文不应含标签：' + call.url);
+    assert(window.__audioInstances.length === 1, '应创建一个 Audio 实例');
+    assert(btn.classList.contains('eca-audio-playing'), '按钮应进入播放态');
+    btn.click();
+    return __wait(60);
+  }).then(function () {
+    assert(!btn.classList.contains('eca-audio-playing') && !btn.classList.contains('eca-audio-loading'), '再点应停止并复位');
+    assert(window.__audioInstances[0].paused === true, '再点应暂停音频');
+  });
+});
+test('M10-6 MiniMax：情绪枚举、持久化命中后不再请求、缓存面板可读', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ minimax: { apiKey: 'k-test', platform: 'cn', model: 'speech-2.8-hd', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'minimax', voiceId: 'male-qn-qingse' });
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    var mes = __addFloor('<p>{弗兰克(微笑)}“笑一个。”</p>', false);
+    window.EmoAvatar.scanAll();
+    __buttons(mes)[0].click();
+    return __wait(120);
+  }).then(function () {
+    var call = __lastTtsCall('minimax');
+    assert(call, '未发起 MiniMax 请求');
+    assert(call.body.voice_setting.emotion === 'happy', '微笑应映射为 happy：' + JSON.stringify(call.body.voice_setting));
+    assert(call.body.text === '笑一个。', '请求文本错误：' + JSON.stringify(call.body.text));
+    assert(__countTtsCalls('minimax') === 1, '首次应只请求一次');
+    return __wait(60);
+  }).then(function () {
+    var btn = __buttons(document.getElementById('chat').lastElementChild)[0];
+    btn.click();               // 播放中再点 = 停止
+    window.EmoAvatar.clearTtsMemory();   // 清内存缓存，逼走 IndexedDB
+    return __wait(40).then(function () {
+      btn.click();             // 再点 = 重新取音频，应命中持久缓存
+      return __wait(150);
+    });
+  }).then(function () {
+    assert(__countTtsCalls('minimax') === 1, '第二次应命中持久缓存不再请求，实际 ' + __countTtsCalls('minimax'));
+    return window.EmoAvatar.getTtsCache();
+  }).then(function (records) {
+    var mine = records.filter(function (r) { return r.engine === 'minimax'; });
+    assert(mine.length === 1, '应持久化 1 条记录，实际 ' + mine.length);
+    assert(mine[0].emotionParam === 'happy' && mine[0].voiceId === 'male-qn-qingse', '记录应含情绪参数与音色');
+  });
+});
+test('M10-7 豆包：自定义情绪经 context_texts 传递且不读进正文', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ doubao: { appId: 'app-test', accessKey: 'ak-test', uid: '1222356', persist: true } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'doubao', voiceId: 'zh_male_cixingjieshuonan', resourceId: 'seed-tts-2.0' });
+  var mes = __addFloor('<p>{弗兰克(杀意)}“别动。”</p>', false);
+  window.EmoAvatar.scanAll();
+  __buttons(mes)[0].click();
+  return __wait(150).then(function () {
+    var call = __lastTtsCall('doubao');
+    assert(call, '未发起豆包请求');
+    assert(call.headers['X-Api-Resource-Id'] === 'seed-tts-2.0', '缺少 Resource ID 头');
+    assert(call.body.req_params.speaker === 'zh_male_cixingjieshuonan', 'speaker 错误');
+    assert(call.body.req_params.text === '别动。', '正文不应含情绪词：' + call.body.req_params.text);
+    var additions = JSON.parse(call.body.req_params.additions);
+    assert(additions.context_texts.length === 1 && additions.context_texts[0].indexOf('杀意') !== -1,
+      '自定义情绪应进入 context_texts：' + JSON.stringify(additions));
+  });
+});
+test('M10-8 Edge 不落盘；总开关关闭后按钮消失、开启后恢复', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.EmoAvatar.setTtsConfig({ edge: { persist: false } });
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-XiaoxiaoNeural' });
+  return window.EmoAvatar.clearTtsCache().then(function () {
+    var mes = __addFloor('<p>{弗兰克(默认)}“甲。”</p>', false);
+    window.EmoAvatar.scanAll();
+    __buttons(mes)[0].click();
+    return __wait(120).then(function () { return window.EmoAvatar.getTtsCache(); });
+  }).then(function (records) {
+    assert(records.filter(function (r) { return r.engine === 'edge'; }).length === 0, 'Edge 默认不应写入持久缓存');
+    window.EmoAvatar.setTtsEnabled(false);
+    assert(document.querySelectorAll('.eca-audio-btn').length === 0, '关闭后按钮应消失');
+    window.EmoAvatar.setTtsEnabled(true);
+    assert(document.querySelectorAll('.eca-audio-btn').length >= 1, '开启后按钮应恢复');
+  });
+});
+test('M10-9 合成失败只提示重试、不切换引擎', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  window.__fetchMode = 'fail';
+  window.EmoAvatar.setVoiceConfig('弗兰克', { engine: 'edge', voiceId: 'zh-CN-YunxiNeural' });
+  var mes = __addFloor('<p>{弗兰克(微笑)}“失败测试。”</p>', false);
+  window.EmoAvatar.scanAll();
+  var btn = __buttons(mes)[0];
+  btn.click();
+  return __wait(150).then(function () {
+    assert(__countTtsCalls('edge') === 1, '应只尝试 Edge 一次');
+    assert(__countTtsCalls('minimax') === 0 && __countTtsCalls('doubao') === 0, '失败时不应改走其它引擎');
+    assert(!btn.classList.contains('eca-audio-loading') && !btn.classList.contains('eca-audio-playing'), '失败后按钮应复位');
+    window.__fetchMode = 'ok';
+  });
+});
+
+test('M10-10 面板入口：语音设置 / 音频设置 / 语音缓存', function () {
+  window.EmoAvatar.setCharactersPersist(['弗兰克', '罗兰']);
+  __seedM1();
+  window.EmoAvatar.openPanel();
+  var panel = document.getElementById('eca-panel');
+  assert(panel.querySelector('#eca-tts-enabled'), '底栏缺少「启用语音按钮」开关');
+  assert(panel.querySelector('#eca-tts-settings-btn'), '底栏缺少「音频设置」按钮');
+  assert(panel.querySelector('#eca-cache-btn'), '底栏缺少「语音缓存」按钮');
+  assert(panel.querySelector('#eca-voice-btn'), '角色详情缺少「语音设置」按钮');
+  // 音频设置：改代理并保存 → 落到 localStorage
+  panel.querySelector('#eca-tts-settings-btn').click();
+  var dlg = document.getElementById('eca-audio-settings');
+  assert(dlg && dlg.style.display === 'flex', '音频设置弹窗未打开');
+  dlg.querySelector('#eca-edge-proxy').value = 'https://example.test/tts';
+  dlg.querySelector('#eca-mm-key').value = 'key-abc';
+  dlg.querySelector('#eca-tts-save').click();
+  var stored = JSON.parse(localStorage.getItem('emoavatar_tts_config'));
+  assert(stored && stored.edge.proxyUrl === 'https://example.test/tts', 'Edge 代理未持久化：' + JSON.stringify(stored && stored.edge));
+  assert(stored.minimax.apiKey === 'key-abc', 'MiniMax Key 未持久化');
+  assert(dlg.style.display === 'none', '保存后弹窗应关闭');
+  // 角色语音设置：切到豆包并填 Resource ID
+  panel.querySelector('#eca-voice-btn').click();
+  var vdlg = document.getElementById('eca-voice-settings');
+  assert(vdlg && vdlg.style.display === 'flex', '语音设置弹窗未打开');
+  vdlg.querySelector('#eca-voice-engine').value = 'doubao';
+  vdlg.querySelector('#eca-voice-engine').dispatchEvent(new Event('change', { bubbles: true }));
+  vdlg.querySelector('#eca-voice-id').value = 'zh_male_test';
+  vdlg.querySelector('#eca-resource-id').value = 'seed-tts-2.0';
+  vdlg.querySelector('#eca-voice-save').click();
+  var vc = window.EmoAvatar.getVoiceConfig('弗兰克');
+  assert(vc && vc.engine === 'doubao' && vc.voiceId === 'zh_male_test' && vc.resourceId === 'seed-tts-2.0',
+    '角色语音配置未保存：' + JSON.stringify(vc));
+  // 缓存面板：应能打开并列出条目
+  panel.querySelector('#eca-cache-btn').click();
+  return __wait(300).then(function () {
+    var cachePanel = document.getElementById('eca-cache-panel');
+    assert(cachePanel && cachePanel.style.display === 'flex', '语音缓存弹窗未打开');
+    assert(cachePanel.querySelector('.eca-audio-tip'), '缓存弹窗缺少统计文案');
+    window.EmoAvatar.closePanel();
+  });
+});
+
+test('M10-11 无 p 包裹（移动端兜底）：两个头像各自取自己那段', function () {
+  __resetChat(); __seedM1(); __ttsReset();
+  var mes = __addFloor('{弗兰克(微笑)}“甲。”{弗兰克(愤怒)}“乙。”', false);
+  window.EmoAvatar.scanAll();
+  var btns = __buttons(mes);
+  assert(btns.length === 2, '无 p 场景应有两个按钮，实际 ' + btns.length);
+  var avatars = mes.querySelectorAll('.eca-avatar:not(.eca-placeholder)');
+  assert(avatars.length === 2, '应渲染两个头像，实际 ' + avatars.length);
+  var first = window.EmoAvatar.getAvatarSpeech(avatars[0]);
+  var second = window.EmoAvatar.getAvatarSpeech(avatars[1]);
+  assert(first && first.text === '甲。', '首个头像文本错误：' + JSON.stringify(first && first.text));
+  assert(second && second.text === '乙。', '第二个头像文本错误：' + JSON.stringify(second && second.text));
 });
 
 /* ---------- 操作按钮 ---------- */
