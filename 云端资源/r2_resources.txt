@@ -1,0 +1,39 @@
+========================================
+情绪头像 Cloudflare R2 云端资源列表（共29张）
+父路径: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/
+========================================
+
+【冯v2 / feng_v2】（共10张）
+feng_v2_default.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_default.png
+feng_v2_smile.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_smile.png
+feng_v2_angry.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_angry.png
+feng_v2_sad.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_sad.png
+feng_v2_surprise.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_surprise.png
+feng_v2_contempt.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_contempt.png
+feng_v2_bloodlust.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_bloodlust.png
+feng_v2_thinking.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_thinking.png
+feng_v2_laugh.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_laugh.png
+feng_v2_shy.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/feng_v2_shy.png
+
+【切嗣 / kiritsugu】（共9张）
+kiritsugu_default.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_default.png
+kiritsugu_smile.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_smile.png
+kiritsugu_angry.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_angry.png
+kiritsugu_sad.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_sad.png
+kiritsugu_surprise.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_surprise.png
+kiritsugu_bloodlust.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_bloodlust.png
+kiritsugu_thinking.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_thinking.png
+kiritsugu_laugh.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_laugh.png
+kiritsugu_shy.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/kiritsugu_shy.png
+
+【威廉V2 / william_v2】（共10张）
+william_v2_default.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_default.png
+william_v2_smile.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_smile.png
+william_v2_angry.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_angry.png
+william_v2_sad.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_sad.png
+william_v2_surprise.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_surprise.png
+william_v2_contempt.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_contempt.png
+william_v2_bloodlust.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_bloodlust.png
+william_v2_thinking.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_thinking.png
+william_v2_laugh.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_laugh.png
+william_v2_shy.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_shy.png
