@@ -1,38 +1,51 @@
 ========================================
-情绪头像 云端资源列表（共29张）
+情绪头像 云端资源列表（共39张）
+图床基址: https://imgur.la/
 ========================================
 
-【拆图输出-冯v2】（共10张）
-冯v2-默认.png: https://files.catbox.moe/0o7add.png
-冯v2-微笑.png: https://files.catbox.moe/fio61p.png
-冯v2-愤怒.png: https://files.catbox.moe/txfofg.png
-冯v2-悲伤.png: https://files.catbox.moe/gs2ews.png
-冯v2-惊讶.png: https://files.catbox.moe/gnel6e.png
-冯v2-轻蔑.png: https://files.catbox.moe/j7kx0k.png
-冯v2-杀意.png: https://files.catbox.moe/yrhxvw.png
-冯v2-思考.png: https://files.catbox.moe/l536hn.png
-冯v2-大笑.png: https://files.catbox.moe/qu6gms.png
-冯v2-害羞.png: https://files.catbox.moe/5i5n5k.png
+【冯v2 / feng_v2】（共10张）
+feng_v2_default.png (冯v2-默认): https://imgur.la/images/2026/09/29/feng_v2_default.png
+feng_v2_smile.png (冯v2-微笑): https://imgur.la/images/2026/09/29/feng_v2_smile.png
+feng_v2_angry.png (冯v2-愤怒): https://imgur.la/images/2026/09/29/feng_v2_angry.png
+feng_v2_sad.png (冯v2-悲伤): https://imgur.la/images/2026/09/29/feng_v2_sad.png
+feng_v2_surprise.png (冯v2-惊讶): https://imgur.la/images/2026/09/29/feng_v2_surprise.png
+feng_v2_contempt.png (冯v2-轻蔑): https://imgur.la/images/2026/09/29/feng_v2_contempt.png
+feng_v2_bloodlust.png (冯v2-杀意): https://imgur.la/images/2026/09/29/feng_v2_bloodlust.png
+feng_v2_thinking.png (冯v2-思考): https://imgur.la/images/2026/09/29/feng_v2_thinking.png
+feng_v2_laugh.png (冯v2-大笑): https://imgur.la/images/2026/09/29/feng_v2_laugh.png
+feng_v2_shy.png (冯v2-害羞): https://imgur.la/images/2026/09/29/feng_v2_shy.png
 
-【拆图输出-切嗣】（共9张）
-切嗣-默认.png: https://files.catbox.moe/m80rbq.png
-切嗣-微笑.png: https://files.catbox.moe/wvz5e2.png
-切嗣-愤怒.png: https://files.catbox.moe/vv5xo5.png
-切嗣-悲伤.png: https://files.catbox.moe/h00aqd.png
-切嗣-惊讶.png: https://files.catbox.moe/ksmoiz.png
-切嗣-杀意.png: https://files.catbox.moe/ba8irr.png
-切嗣-思考.png: https://files.catbox.moe/8pbopz.png
-切嗣-大笑.png: https://files.catbox.moe/3erl51.png
-切嗣-害羞.png: https://files.catbox.moe/5bn29g.png
+【切嗣 / kiritsugu】（共9张）
+kiritsugu_default.png (切嗣-默认): https://imgur.la/images/2026/09/29/kiritsugu_default.png
+kiritsugu_smile.png (切嗣-微笑): https://imgur.la/images/2026/09/29/kiritsugu_smile.png
+kiritsugu_angry.png (切嗣-愤怒): https://imgur.la/images/2026/09/29/kiritsugu_angry.png
+kiritsugu_sad.png (切嗣-悲伤): https://imgur.la/images/2026/09/29/kiritsugu_sad.png
+kiritsugu_surprise.png (切嗣-惊讶): https://imgur.la/images/2026/09/29/kiritsugu_surprise.png
+kiritsugu_bloodlust.png (切嗣-杀意): https://imgur.la/images/2026/09/29/kiritsugu_bloodlust.png
+kiritsugu_thinking.png (切嗣-思考): https://imgur.la/images/2026/09/29/kiritsugu_thinking.png
+kiritsugu_laugh.png (切嗣-大笑): https://imgur.la/images/2026/09/29/kiritsugu_laugh.png
+kiritsugu_shy.png (切嗣-害羞): https://imgur.la/images/2026/09/29/kiritsugu_shy.png
 
-【拆图输出-威廉V2】（共10张）
-威廉V2-默认.png: https://files.catbox.moe/so72y9.png
-威廉V2-微笑.png: https://files.catbox.moe/i8cc89.png
-威廉V2-愤怒.png: https://files.catbox.moe/uxt10k.png
-威廉V2-悲伤.png: https://files.catbox.moe/6qn2il.png
-威廉V2-惊讶.png: https://files.catbox.moe/jxfyd7.png
-威廉V2-轻蔑.png: https://files.catbox.moe/qewqs0.png
-威廉V2-杀意.png: https://files.catbox.moe/f0qfon.png
-威廉V2-思考.png: https://files.catbox.moe/w5sihk.png
-威廉V2-大笑.png: https://files.catbox.moe/ljvald.png
-威廉V2-害羞.png: https://files.catbox.moe/uh7uvy.png
+【威廉V2 / william_v2】（共10张）
+william_v2_default.png (威廉V2-默认): https://imgur.la/images/2026/09/29/william_v2_default.png
+william_v2_smile.png (威廉V2-微笑): https://imgur.la/images/2026/09/29/william_v2_smile.png
+william_v2_angry.png (威廉V2-愤怒): https://imgur.la/images/2026/09/29/william_v2_angry.png
+william_v2_sad.png (威廉V2-悲伤): https://imgur.la/images/2026/09/29/william_v2_sad.png
+william_v2_surprise.png (威廉V2-惊讶): https://imgur.la/images/2026/09/29/william_v2_surprise.png
+william_v2_contempt.png (威廉V2-轻蔑): https://imgur.la/images/2026/09/29/william_v2_contempt.png
+william_v2_bloodlust.png (威廉V2-杀意): https://imgur.la/images/2026/09/29/william_v2_bloodlust.png
+william_v2_thinking.png (威廉V2-思考): https://imgur.la/images/2026/09/29/william_v2_thinking.png
+william_v2_laugh.png (威廉V2-大笑): https://imgur.la/images/2026/09/29/william_v2_laugh.png
+william_v2_shy.png (威廉V2-害羞): https://imgur.la/images/2026/09/29/william_v2_shy.png
+
+【大帝 / iskandar】（共10张）
+iskandar_default.png (大帝-默认): https://imgur.la/images/2026/09/29/iskandar_default.png
+iskandar_smile.png (大帝-微笑): https://imgur.la/images/2026/09/29/iskandar_smile.png
+iskandar_angry.png (大帝-愤怒): https://imgur.la/images/2026/09/29/iskandar_angry.png
+iskandar_sad.png (大帝-悲伤): https://imgur.la/images/2026/09/29/iskandar_sad.png
+iskandar_surprise.png (大帝-惊讶): https://imgur.la/images/2026/09/29/iskandar_surprise.png
+iskandar_contempt.png (大帝-轻蔑): https://imgur.la/images/2026/09/29/iskandar_contempt.png
+iskandar_bloodlust.png (大帝-杀意): https://imgur.la/images/2026/09/29/iskandar_bloodlust.png
+iskandar_thinking.png (大帝-思考): https://imgur.la/images/2026/09/29/iskandar_thinking.png
+iskandar_laugh.png (大帝-大笑): https://imgur.la/images/2026/09/29/iskandar_laugh.png
+iskandar_shy.png (大帝-害羞): https://imgur.la/images/2026/09/29/iskandar_shy.png
