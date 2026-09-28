@@ -311,7 +311,8 @@ function __seedM1() {
 /* ---------- M0 用例：加载与基建 ---------- */
 test('M0-1 脚本已加载且暴露版本', function () {
   assert(window.EmoAvatar && typeof window.EmoAvatar === 'object', 'window.EmoAvatar 不存在');
-  assert(window.EmoAvatar.version === '0.6.0', '版本不符：' + window.EmoAvatar.version);
+  // 本地版与公开版（内置云端头像）共用本回归页，两者版本号都算通过
+  assert(window.EmoAvatar.version === '0.6.0' || window.EmoAvatar.version === '0.7.0-public', '版本不符：' + window.EmoAvatar.version);
 });
 test('M0-2 样式已注入且尺寸变量生效', function () {
   assert(document.getElementById('eca-styles'), '缺少 #eca-styles');
