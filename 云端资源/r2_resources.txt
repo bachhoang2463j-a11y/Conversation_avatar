@@ -1,5 +1,5 @@
 ========================================
-情绪头像 Cloudflare R2 云端资源列表（共29张）
+情绪头像 Cloudflare R2 云端资源列表（共39张）
 父路径: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/
 ========================================
 
@@ -37,3 +37,15 @@ william_v2_bloodlust.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/si
 william_v2_thinking.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_thinking.png
 william_v2_laugh.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_laugh.png
 william_v2_shy.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/william_v2_shy.png
+
+【大帝 / iskandar】（共10张）
+iskandar_default.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_default.png
+iskandar_smile.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_smile.png
+iskandar_angry.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_angry.png
+iskandar_sad.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_sad.png
+iskandar_surprise.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_surprise.png
+iskandar_contempt.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_contempt.png
+iskandar_bloodlust.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_bloodlust.png
+iskandar_thinking.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_thinking.png
+iskandar_laugh.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_laugh.png
+iskandar_shy.png: https://pub-28508adcb2484e98a7a7965b78878723.r2.dev/sillytarvenassets/conversationavatar/iskandar_shy.png
